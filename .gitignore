@@ -19,6 +19,9 @@ logs/
 # Runs/outputs
 runs/
 
+# Temporary files
+prompt.md
+
 # Frontend
 agent-chat-arena-main/node_modules/
 
