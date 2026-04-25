@@ -21,6 +21,7 @@ runs/
 
 # Temporary files
 prompt.md
+GIT_INSTRUCTIONS.md
 
 # Frontend
 agent-chat-arena-main/node_modules/

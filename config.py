@@ -1,21 +1,42 @@
 import os
+from pathlib import Path
+
+
+def _normalize_key(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.replace("\u2011", "-").replace("\u2010", "-").replace("\u2212", "-").strip()
+
+
+def _load_env_file() -> dict[str, str]:
+    env: dict[str, str] = {}
+    env_path = Path(".env")
+    if not env_path.exists():
+        return env
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env[key.strip()] = value.strip().strip("'").strip('"')
+    return env
+
+
+_ENV_FILE = _load_env_file()
 
 # API Configuration
-MODEL = "gpt-4o-mini"
+OPENAI_API_KEY = _normalize_key(_ENV_FILE.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY"))
+GEMINI_API_KEY = _normalize_key(_ENV_FILE.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY"))
+ANTHROPIC_API_KEY = _normalize_key(_ENV_FILE.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
 
-# Load API key from .env file directly
-try:
-    with open('.env', encoding='utf-8') as f:
-        _env_line = f.read().split('=')[1].strip()
-        # Normalize to ASCII (replace Unicode dashes with regular hyphens)
-        API_KEY = _env_line.replace('\u2011', '-').replace('\u2010', '-').replace('\u2212', '-')
-except:
-    API_KEY = os.getenv("OPENAI_API_KEY")
+DEFAULT_PROVIDER = "openai" if OPENAI_API_KEY else "gemini" if GEMINI_API_KEY else "openai"
+DEFAULT_MODEL = "gpt-4o-mini" if DEFAULT_PROVIDER == "openai" else "gemini-3.1-flash-lite-preview"
+
+# Backward-compatible aliases for existing code paths.
+MODEL = DEFAULT_MODEL
+API_KEY = OPENAI_API_KEY if DEFAULT_PROVIDER == "openai" else GEMINI_API_KEY
 
 API_URL = "https://api.openai.com/v1/responses"
-
-import os
-from pathlib import Path
 
 # Orchestration
 AGENTS_DIR_PATH = Path(os.path.dirname(os.path.abspath(__file__))) / "agents"
@@ -65,3 +86,4 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENTS_DIR = os.path.join(BASE_DIR, "agents")
 SHARED_DIR = os.path.join(BASE_DIR, "shared")
 RUNS_DIR = os.path.join(BASE_DIR, "runs")
+DB_PATH = os.path.join(BASE_DIR, "arena.db")

@@ -15,17 +15,85 @@ if sys.platform == "win32":
 
 
 class Orchestrator:
-    def __init__(self, run_dir: Path):
+    def __init__(
+        self,
+        run_dir: Path,
+        simulation: dict | None = None,
+        initial_state: dict | None = None,
+        runtime_config: dict | None = None,
+    ):
         self.run_dir = run_dir
-        self.agents = {name: Agent(name) for name in config.AGENTS}
-        self.logger = Logger(run_dir, config.AGENTS)
-        self.turn = 0
-        self.consecutive_all_hold = 0
-        self.last_spoke = {name: 0 for name in config.AGENTS}
-        self.shared_transcript: list = []  # [{"turn": N, "speaker": str, "message": str}]
+        self.runtime_config = runtime_config or {}
+        self.simulation = simulation or self._build_default_simulation()
+        self.agent_order = [agent["id"] for agent in self.simulation["agents"]]
+        self.agents = {
+            agent["id"]: Agent(
+                agent["id"],
+                context_override={
+                    "provider_type": agent.get("provider_type", "openai"),
+                    "model_id": agent.get("model_id", config.MODEL),
+                    "api_key": agent.get("api_key", config.API_KEY),
+                    "identity": agent["identity"],
+                    "memory": agent.get("memory", ""),
+                    "personas": agent.get("personas", ""),
+                    "group_memories": agent.get("group_memories", ""),
+                    "protocol": self.simulation["protocol"],
+                    "messages": (initial_state or {}).get("agent_states", {}).get(agent["id"], {}).get("messages"),
+                    "thought_history": (initial_state or {}).get("agent_states", {}).get(agent["id"], {}).get("thought_history"),
+                } if simulation else None,
+            )
+            for agent in self.simulation["agents"]
+        }
+        self.logger = Logger(run_dir, self.agent_order)
+        self.turn = (initial_state or {}).get("turn", 0)
+        self.consecutive_all_hold = (initial_state or {}).get("consecutive_all_hold", 0)
+        self.last_spoke = (initial_state or {}).get("last_spoke", {name: 0 for name in self.agent_order})
+        self.shared_transcript: list = (initial_state or {}).get("shared_transcript", [])
         # Track consecutive wins ending at the most recent spoken turn.
         # Resets to 0 for everyone except the winner; winner's count increments by 1.
-        self.consecutive_wins = {name: 0 for name in config.AGENTS}
+        self.consecutive_wins = (initial_state or {}).get("consecutive_wins", {name: 0 for name in self.agent_order})
+
+    def _cfg(self, key: str, fallback):
+        return self.runtime_config.get(key, fallback)
+
+    def _build_default_simulation(self) -> dict:
+        provider_type = self.runtime_config.get("default_provider_type", config.DEFAULT_PROVIDER)
+        model_id = self.runtime_config.get("default_model_id", config.DEFAULT_MODEL)
+        api_key = self.runtime_config.get("default_api_key", config.API_KEY)
+        agents = []
+        for name in config.AGENTS:
+            agent = Agent(name)
+            agents.append({
+                "id": name,
+                "provider_type": provider_type,
+                "model_id": model_id,
+                "api_key": api_key,
+                "identity": agent.identity,
+                "memory": agent.memory,
+                "personas": agent.personas,
+                "group_memories": agent.group_memories,
+            })
+        with open(Path(config.SHARED_DIR) / "protocol.md", "r", encoding="utf-8") as f:
+            protocol = f.read()
+        with open(Path(config.SHARED_DIR) / "kickoff.md", "r", encoding="utf-8") as f:
+            kickoff = f.read().strip()
+        return {"agents": agents, "protocol": protocol, "kickoff": kickoff}
+
+    def serialize_state(self) -> dict:
+        return {
+            "turn": self.turn,
+            "consecutive_all_hold": self.consecutive_all_hold,
+            "last_spoke": self.last_spoke,
+            "shared_transcript": self.shared_transcript,
+            "consecutive_wins": self.consecutive_wins,
+            "agent_states": {
+                name: {
+                    "messages": agent.messages,
+                    "thought_history": agent.thought_history,
+                }
+                for name, agent in self.agents.items()
+            },
+        }
 
     def _transcript_since(self, last_turn: int) -> list:
         """Return shared transcript entries strictly after the given turn number."""
@@ -33,9 +101,10 @@ class Orchestrator:
 
     def _penalty_multiplier(self, consecutive_wins: int) -> float:
         """Look up penalty multiplier from config, falling back to the highest tier."""
-        if not config.CONSECUTIVE_SPEAKER_PENALTY:
+        if not self._cfg("consecutive_speaker_penalty", config.CONSECUTIVE_SPEAKER_PENALTY):
             return 1.0
-        table = config.CONSECUTIVE_PENALTY_MULTIPLIERS
+        raw_table = self._cfg("consecutive_penalty_multipliers", config.CONSECUTIVE_PENALTY_MULTIPLIERS)
+        table = {int(key): float(value) for key, value in raw_table.items()}
         if consecutive_wins in table:
             return table[consecutive_wins]
         # Fall back to the highest defined tier for any value above the table
@@ -70,9 +139,11 @@ class Orchestrator:
 
     async def bootstrap(self) -> None:
         """Load kickoff message, append to all agents, and seed shared transcript."""
+        if self.shared_transcript:
+            fl.ok("bootstrap skipped: existing state loaded")
+            return
         fl.step("bootstrap: loading kickoff")
-        with open(Path(config.SHARED_DIR) / "kickoff.md", "r", encoding="utf-8") as f:
-            kickoff = f.read().strip()
+        kickoff = self.simulation["kickoff"]
         fl.info("kickoff_length", len(kickoff))
         for agent in self.agents.values():
             agent.append_user_message(kickoff)
@@ -98,7 +169,7 @@ class Orchestrator:
 
         # ----- PHASE 1: DECISION -----
         fl.step(f"turn {self.turn}: phase 1 — building decision messages")
-        for name in config.AGENTS:
+        for name in self.agent_order:
             agent = self.agents[name]
             you_last = (
                 f"turn {self.last_spoke[name]}"
@@ -122,7 +193,7 @@ class Orchestrator:
         # Parallel decision calls — each appends exactly one assistant message
         fl.step(f"turn {self.turn}: phase 1 — calling APIs in parallel")
         decision_results = await asyncio.gather(
-            *[self.agents[name].call_decision() for name in config.AGENTS]
+            *[self.agents[name].call_decision() for name in self.agent_order]
         )
         decisions = {r["name"]: r for r in decision_results}
 
@@ -150,7 +221,7 @@ class Orchestrator:
         })
 
         # Print and flow-log decision summary
-        for name in config.AGENTS:
+        for name in self.agent_order:
             d = decisions[name]
             fl.decision(self.turn, name, d["decision"], d["urgency"], d.get("inner_thought", ""))
             fl.info(f"{name}: raw_output", d.get("raw_output", "")[:300])
@@ -175,7 +246,7 @@ class Orchestrator:
 
         if not speakers:
             # All HOLD — record thoughts, reset consecutive wins, possibly terminate
-            for name in config.AGENTS:
+            for name in self.agent_order:
                 self.agents[name].record_thought(
                     turn=self.turn,
                     spoke=False,
@@ -185,9 +256,9 @@ class Orchestrator:
 
             self.consecutive_all_hold += 1
             fl.warn(f"turn {self.turn}: ALL HOLD (consecutive={self.consecutive_all_hold})")
-            formatted = format_transcript_for_log(self.turn, None, None, decisions, config.AGENTS)
+            formatted = format_transcript_for_log(self.turn, None, None, decisions, self.agent_order)
             self.logger.log_turn(self.turn, formatted)
-            for name in config.AGENTS:
+            for name in self.agent_order:
                 self.logger.log_api_call(name, self.turn, {"phase": "decision"}, decisions[name])
             self.logger.write_files()
             print("  All agents HOLD.")
@@ -197,10 +268,10 @@ class Orchestrator:
                 "message": "",
                 "decisions": decisions
             }
-            if self.consecutive_all_hold >= config.ALL_HOLD_TERMINATION:
+            if self.consecutive_all_hold >= self._cfg("all_hold_termination", config.ALL_HOLD_TERMINATION):
                 print(f"  Terminated: {self.consecutive_all_hold} consecutive all-HOLD turns.")
                 return {"continue": False, "data": turn_data}
-            return {"continue": self.turn < config.MAX_TURNS, "data": turn_data}
+            return {"continue": self.turn < self._cfg("max_turns", config.MAX_TURNS), "data": turn_data}
 
         self.consecutive_all_hold = 0
 
@@ -212,14 +283,14 @@ class Orchestrator:
         fl.floor(self.turn, winner_name, winner_decision["effective_urgency"], list(speakers.keys()))
 
         # Update consecutive-wins tracker: winner +1, everyone else resets to 0
-        for name in config.AGENTS:
+        for name in self.agent_order:
             if name == winner_name:
                 self.consecutive_wins[name] += 1
             else:
                 self.consecutive_wins[name] = 0
 
         # Record thoughts for everyone (Option A — winner=spoke, others=held)
-        for name in config.AGENTS:
+        for name in self.agent_order:
             self.agents[name].record_thought(
                 turn=self.turn,
                 spoke=(name == winner_name),
@@ -243,12 +314,12 @@ class Orchestrator:
         })
 
         # Log and print transcript entry
-        formatted = format_transcript_for_log(self.turn, winner_name, winner_message, decisions, config.AGENTS)
+        formatted = format_transcript_for_log(self.turn, winner_name, winner_message, decisions, self.agent_order)
         self.logger.log_turn(self.turn, formatted)
         print(formatted)
 
         # Log API calls for debugging
-        for name in config.AGENTS:
+        for name in self.agent_order:
             self.logger.log_api_call(name, self.turn, {"phase": "decision"}, decisions[name])
         self.logger.log_api_call(winner_name, self.turn, {"phase": "response"}, response_data)
 
@@ -263,7 +334,7 @@ class Orchestrator:
             "decisions": decisions
         }
 
-        return {"continue": self.turn < config.MAX_TURNS, "data": turn_data}
+        return {"continue": self.turn < self._cfg("max_turns", config.MAX_TURNS), "data": turn_data}
 
     async def run(self) -> None:
         """Run the full conversation loop."""

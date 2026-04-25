@@ -58,15 +58,7 @@ export function useSimulation() {
     try {
       const res = await fetch("/api/reset", { method: "POST" });
       if (!res.ok) throw new Error("Failed to reset backend");
-      
-      setMessages([
-        {
-          id: "intro",
-          speaker: "narrator",
-          text: config.kickoff,
-          timestamp: Date.now(),
-        },
-      ]);
+      setMessages([]);
       setStatus("running");
     } catch (err) {
       console.error(err);

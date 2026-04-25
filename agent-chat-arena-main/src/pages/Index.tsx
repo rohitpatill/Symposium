@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useSimulation } from "@/hooks/useSimulation";
 import { ChatHeader } from "@/components/ChatHeader";
+import { ScenarioSheetButton } from "@/components/ScenarioSheetButton";
 import { ChatStream } from "@/components/ChatStream";
 import { UnderTheHoodPanel } from "@/components/UnderTheHoodPanel";
 
@@ -11,6 +12,7 @@ const Index = () => {
   return (
     <div className="h-screen w-full flex flex-col overflow-hidden">
       <ChatHeader
+        title="Symposium"
         hasStarted={sim.hasStarted}
         isThinking={sim.isThinking}
         status={sim.status}
@@ -27,6 +29,9 @@ const Index = () => {
       />
       <div className="flex-1 flex min-h-0">
         <main className="flex-1 flex flex-col min-w-0">
+          <div className="mx-auto mt-4 flex w-full max-w-3xl justify-end px-4 sm:px-6">
+            <ScenarioSheetButton scenario={sim.config?.kickoff} />
+          </div>
           <ChatStream
             messages={sim.messages}
             isThinking={sim.isThinking}

@@ -125,6 +125,11 @@ function DecisionRow({
               </span>
             )}
           </div>
+          {(meta.modelId || meta.providerType) && (
+            <div className="mt-0.5 text-[10px] font-mono text-muted-foreground/80">
+              {[meta.providerType?.toUpperCase(), meta.modelId].filter(Boolean).join(" · ")}
+            </div>
+          )}
         </div>
         <span
           className={cn(

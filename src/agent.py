@@ -1,35 +1,49 @@
 import json
-import requests
 from pathlib import Path
 from typing import Optional
 import config
+from src.providers import get_provider
 
 
 class Agent:
-    def __init__(self, name: str):
+    def __init__(self, name: str, context_override: Optional[dict] = None):
         self.name = name
         self.agent_dir = Path(config.AGENTS_DIR) / name
+        self.context_override = context_override or {}
 
-        # Load static files (memory and personas are optional per scenario)
-        self.identity = self._load_file("identity.md")
-        self.memory = self._load_optional("memory.md")
-        self.personas = self._load_optional("personas.md")
+        if self.context_override:
+            self.provider_type = self.context_override.get("provider_type", config.DEFAULT_PROVIDER)
+            self.model_id = self.context_override.get("model_id", config.DEFAULT_MODEL)
+            self.api_key = self.context_override.get("api_key", config.API_KEY)
+            self.identity = self.context_override.get("identity", "")
+            self.memory = self.context_override.get("memory", "")
+            self.personas = self.context_override.get("personas", "")
+            self.group_memories = self.context_override.get("group_memories", "")
+            self.protocol = self.context_override.get("protocol", "")
+        else:
+            self.provider_type = config.DEFAULT_PROVIDER
+            self.model_id = config.DEFAULT_MODEL
+            self.api_key = config.API_KEY
+            # Load static files (memory and personas are optional per scenario)
+            self.identity = self._load_file("identity.md")
+            self.memory = self._load_optional("memory.md")
+            self.personas = self._load_optional("personas.md")
 
-        # Load shared files
-        self.group_memories = self._load_group_memories()
-        self.protocol = self._load_file(Path(config.SHARED_DIR) / "protocol.md")
+            # Load shared files
+            self.group_memories = self._load_group_memories()
+            self.protocol = self._load_file(Path(config.SHARED_DIR) / "protocol.md")
 
         # Build system prompt (done once, never changes)
         self.system_prompt = self._build_system_prompt()
 
         # Message array (grows each turn)
-        self.messages = [
-            {"role": "system", "content": self.system_prompt}
-        ]
+        initial_messages = self.context_override.get("messages")
+        self.messages = initial_messages if initial_messages else [{"role": "system", "content": self.system_prompt}]
 
         # Thought history: this agent's last N inner thoughts (whether they spoke or held)
         # Each entry: {"turn": int, "spoke": bool, "thought": str}
-        self.thought_history: list = []
+        initial_thought_history = self.context_override.get("thought_history")
+        self.thought_history: list = initial_thought_history if initial_thought_history is not None else []
 
     def _load_file(self, filename) -> str:
         if isinstance(filename, Path):
@@ -108,47 +122,17 @@ class Agent:
         if len(self.thought_history) > config.MAX_THOUGHT_HISTORY:
             self.thought_history.pop(0)
 
-    def _build_input_list(self) -> list:
-        """Convert self.messages to /v1/responses input format."""
-        input_list = []
-        for msg in self.messages:
-            if msg["role"] == "system":
-                input_list.append({
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": msg["content"]}]
-                })
-            elif msg["role"] == "user":
-                input_list.append({
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": msg["content"]}]
-                })
-            elif msg["role"] == "assistant":
-                input_list.append({
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": msg["content"]}]
-                })
-        return input_list
-
     def _post(self, max_tokens: int) -> dict:
-        """Make the actual HTTP request to OpenAI API."""
-        payload = {
-            "model": config.MODEL,
-            "input": self._build_input_list(),
-            "max_output_tokens": max_tokens,
-            "text": {"format": {"type": "json_object"}}
-        }
-        safe_api_key = config.API_KEY.replace('\u2011', '-').replace('\u2010', '-').replace('\u2212', '-')
-        headers = {
-            "Authorization": safe_api_key,
-            "Content-Type": "application/json"
-        }
-        response = requests.post(config.API_URL, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()
-
-    def _extract_text(self, api_response: dict) -> str:
-        """Extract response text from API response."""
-        return api_response["output"][0]["content"][0]["text"]
+        provider = get_provider(self.provider_type)
+        return provider.generate_json(
+            api_key=self.api_key,
+            model=self.model_id,
+            system_prompt=self.system_prompt,
+            messages=[message for message in self.messages if message["role"] != "system"],
+            max_tokens=max_tokens,
+            cache_key=f"{self.provider_type}:{self.model_id}:{self.name}",
+            cache_options={"retention": "in_memory"},
+        )
 
     async def call_decision(self) -> dict:
         """
@@ -159,7 +143,7 @@ class Agent:
         Appends exactly one assistant message.
         """
         data = self._post(max_tokens=config.DECISION_MAX_TOKENS)
-        decision_text = self._extract_text(data)
+        decision_text = data["text"]
 
         # Append assistant message (invariant: exactly one)
         self.messages.append({"role": "assistant", "content": decision_text})
@@ -204,7 +188,7 @@ class Agent:
         self.messages.append({"role": "user", "content": intent_msg})
 
         data = self._post(max_tokens=config.RESPONSE_MAX_TOKENS)
-        response_text = self._extract_text(data)
+        response_text = data["text"]
 
         # Append assistant message (invariant: exactly one)
         self.messages.append({"role": "assistant", "content": response_text})

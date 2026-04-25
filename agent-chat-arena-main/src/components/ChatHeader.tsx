@@ -4,6 +4,7 @@ import { Switch } from "@/components/ui/switch";
 import type { SimulationConfig } from "@/lib/types";
 
 interface Props {
+  title?: string;
   hasStarted: boolean;
   isThinking: boolean;
   status: string;
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export function ChatHeader({
+  title = "Simulation",
   hasStarted, isThinking, status, autoPlay, setAutoPlay,
   onStart, onAdvance, onReset, totalTurns, completedTurns,
   panelOpen, togglePanel, config,
@@ -35,7 +37,7 @@ export function ChatHeader({
         </div>
         <div className="min-w-0">
           <h1 className="font-display text-lg sm:text-xl font-semibold leading-tight truncate">
-            Simulation
+            {title}
           </h1>
           <div className="flex items-center gap-1.5">
             {speakingAgents.map((meta, idx) => (
