@@ -36,6 +36,11 @@ class Logger:
         self.transcript_lines.append(formatted)
 
     def write_files(self) -> None:
+        """
+        Write all logs to disk. Safe to call repeatedly — each call rewrites
+        from current in-memory state. Called after every turn so the runs/
+        folder is always up-to-date (works for both CLI and server modes).
+        """
         # Per-agent logs
         for agent_name in self.agent_names:
             log_path = self.run_dir / f"{agent_name}.log"
@@ -51,15 +56,15 @@ class Logger:
                     f.write(json.dumps(call['response'], indent=2, ensure_ascii=False))
                     f.write("\n```\n\n")
 
-        # Transcript (human-readable)
+        # Transcript (human-readable, scenario-agnostic header)
         transcript_path = self.run_dir / "transcript.md"
         with open(transcript_path, "w", encoding="utf-8") as f:
             f.write("# Conversation Transcript\n\n")
-            f.write("Weekend trip planning conversation between Aarav, Priya, and Kabir.\n\n")
+            f.write(f"Agents: {', '.join(name.capitalize() for name in self.agent_names)}\n\n")
             f.write("---\n\n")
             f.write("\n\n".join(self.transcript_lines))
 
-        # Decisions log (JSONL — one line per turn, includes losers' reasons)
+        # Decisions log (JSONL — one line per turn, includes losers' thoughts + penalty info)
         decisions_path = self.run_dir / "decisions.jsonl"
         with open(decisions_path, "w", encoding="utf-8") as f:
             for entry in self.decision_log:

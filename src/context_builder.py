@@ -7,36 +7,55 @@ def build_decision_user_message(
     agent_name: str,
     you_last_spoke: str,
     transcript_since_last_turn: list,
-    held_thoughts: list,
-    repetition_count: int = 0,
-    memory_trigger: Optional[str] = None,
+    thought_history: list,
 ) -> str:
     """
-    Builds the Phase 1 user message — the decision prompt context.
+    Phase 1 prompt — asks the agent for a private inner thought + decision.
 
     transcript_since_last_turn: list of {"turn": int, "speaker": str, "message": str}
-    held_thoughts: list of "turn N: reason" strings from this agent's prior losses
+        — what others said (and you said) since this agent last spoke.
+    thought_history: this agent's OWN last N inner thoughts, list of
+        {"turn": int, "spoke": bool, "thought": str}
+        — private to this agent, never shared with others.
     """
-    # On early turns with no conversation yet, nudge agents to open
+
     is_opener = len([e for e in transcript_since_last_turn if e.get("speaker") != "Narrator"]) == 0
-    opener_note = " The conversation has just started — someone needs to open. If you have a strong opinion, claim the floor." if is_opener else ""
+    opener_note = (
+        " The conversation has just started — someone needs to open. "
+        "If you have a strong opinion, claim the floor."
+    ) if is_opener else ""
+
+    instruction = (
+        f"You are {agent_name.capitalize()}.\n\n"
+        "Decide whether to SPEAK or HOLD this turn. Output a single raw JSON object:\n\n"
+        '  HOLD form:  {"decision": "HOLD", "inner_thought": "<your private thought>"}\n'
+        '  SPEAK form: {"decision": "SPEAK", "urgency": 7.43, "inner_thought": "<your private thought>"}\n\n'
+        "CRITICAL: `inner_thought` is your PRIVATE internal monologue — what you are thinking to yourself, "
+        "NOT what you would say out loud to the group. Frame it from your own perspective. "
+        "Use first-person reflective phrasing like 'I think...', 'I should...', 'I'm worried that...', 'They don't realize...'. "
+        "DO NOT phrase it as a pitch, speech, or argument aimed at others. "
+        "If you win the floor, you'll write the actual outward message in a separate step — keep them distinct.\n\n"
+        "Examples of GOOD inner_thought:\n"
+        '  "I think Reyes is right that we\'re running out of time, but Jax\'s panic isn\'t helping. I should stay quiet and let the captain lead."\n'
+        '  "Nova keeps centering herself. I have the override key — they all need me. I should remind them of that now."\n'
+        '  "I\'m torn. My research matters but so does Jax\'s life. I genuinely don\'t know what to say yet."\n\n'
+        "Examples of BAD inner_thought (these are pitches, not thoughts — DO NOT do this):\n"
+        '  "We need to decide right now! My research is vital!" (this is a speech, not a thought)\n'
+        '  "Listen up everyone, the pod thrusters are shot!" (this is something you would SAY, not THINK)\n\n'
+        "If you SPEAK, urgency must be a precise float between 0.00 and 10.00, two decimals. "
+        "Use precise values like 6.73 or 8.41 — never round numbers like 7.0 or 8.5. "
+        "Higher urgency = stronger conviction that you must speak right now over others.\n\n"
+        "Reply with a single raw JSON object. No markdown, no code fences, no extra text."
+        f"{opener_note}"
+    )
 
     payload = {
         "turn": turn_num,
         "you_last_spoke": you_last_spoke,
         "transcript_since_your_last_turn": transcript_since_last_turn,
-        "your_held_thoughts": held_thoughts,
-        "times_you_made_similar_point_recently": repetition_count,
-        "instruction": (
-            f"You are {agent_name.capitalize()}. "
-            "Decide: HOLD, or SPEAK with urgency (0-10 precise float, 2 decimals) and 1-2 line reason. "
-            "Urgency must reflect your exact conviction — use precise values like 6.73 or 8.41, never round numbers like 7.0 or 8.5. "
-            "Reply with a single raw JSON object starting with { and ending with }. "
-            f"No markdown, no code fences, no extra text.{opener_note}"
-        ),
+        "your_recent_inner_thoughts": thought_history,
+        "instruction": instruction,
     }
-    if memory_trigger:
-        payload["memory_reminder"] = memory_trigger
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -49,26 +68,30 @@ def format_transcript_for_log(
 ) -> str:
     """
     Format a single-speaker turn for the human-readable transcript.
-
-    winner: agent name who spoke, or None if all HOLD
-    winner_message: the message text, or None
-    decisions: full decisions dict including losers' reasons
+    Shows winner's spoken message + everyone's private inner thoughts (for human review only).
     """
     lines = [f"[Turn {turn_num}]"]
 
     if winner is None:
         lines.append("  (all held)")
+        for agent in agent_order:
+            d = decisions.get(agent, {})
+            thought = d.get("inner_thought", "")
+            if thought:
+                lines.append(f"  (thought) {agent.capitalize()}: {thought}")
     else:
         lines.append(f"  Speaker: {winner.capitalize()}")
         lines.append(f"  Message: {winner_message}")
-        # Show losers' held intents for human review (not in any agent's LLM context)
         for agent in agent_order:
-            if agent == winner:
-                continue
             d = decisions.get(agent, {})
-            if d.get("decision") == "SPEAK":
-                lines.append(f"  (held) {agent.capitalize()} wanted: {d.get('reason', '')}")
+            thought = d.get("inner_thought", "")
+            if not thought:
+                continue
+            if agent == winner:
+                lines.append(f"  (thought, spoke) {agent.capitalize()}: {thought}")
+            elif d.get("decision") == "SPEAK":
+                lines.append(f"  (thought, held back) {agent.capitalize()}: {thought}")
             else:
-                lines.append(f"  (held) {agent.capitalize()}: HOLD")
+                lines.append(f"  (thought, HOLD) {agent.capitalize()}: {thought}")
 
     return "\n".join(lines)

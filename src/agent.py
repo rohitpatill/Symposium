@@ -10,10 +10,10 @@ class Agent:
         self.name = name
         self.agent_dir = Path(config.AGENTS_DIR) / name
 
-        # Load static files
+        # Load static files (memory and personas are optional per scenario)
         self.identity = self._load_file("identity.md")
-        self.memory = self._load_file("memory.md")
-        self.personas = self._load_file("personas.md")
+        self.memory = self._load_optional("memory.md")
+        self.personas = self._load_optional("personas.md")
 
         # Load shared files
         self.group_memories = self._load_group_memories()
@@ -27,8 +27,9 @@ class Agent:
             {"role": "system", "content": self.system_prompt}
         ]
 
-        # Held thoughts: reasons this agent wanted to speak but lost the floor
-        self.held_thoughts: list = []
+        # Thought history: this agent's last N inner thoughts (whether they spoke or held)
+        # Each entry: {"turn": int, "spoke": bool, "thought": str}
+        self.thought_history: list = []
 
     def _load_file(self, filename) -> str:
         if isinstance(filename, Path):
@@ -38,44 +39,60 @@ class Agent:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
+    def _load_optional(self, filename: str) -> str:
+        """Load a file if it exists; return empty string otherwise."""
+        path = self.agent_dir / filename
+        if not path.exists():
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
     def _load_group_memories(self) -> str:
+        """
+        Return group memories visible to this agent.
+
+        Filtering rules:
+        - Top-level content (before any `## ` subsection) is always included.
+        - A `## ` subsection is included if it contains this agent's name (case-insensitive)
+          OR if it represents an "all" / "everyone" section.
+        - Otherwise the subsection is excluded (e.g. pair memories this agent isn't in).
+        """
         path = Path(config.SHARED_DIR) / "group_memories.md"
+        if not path.exists():
+            return ""
+
         with open(path, "r", encoding="utf-8") as f:
             full_content = f.read()
 
         lines = full_content.split("\n")
         filtered_lines = []
-        include_section = False
+        include_section = True  # top-level content included by default
+        name_lower = self.name.lower()
+        all_markers = {"all", "everyone", "shared", "group"}
 
         for line in lines:
-            if line.startswith("## All Three"):
-                include_section = True
-            elif line.startswith("## "):
-                include_section = self.name in line.lower()
+            if line.startswith("## "):
+                heading = line[3:].lower()
+                # Include if heading mentions this agent OR signals an "all" section
+                include_section = (
+                    name_lower in heading
+                    or any(m in heading for m in all_markers)
+                )
             if include_section:
                 filtered_lines.append(line)
 
         return "\n".join(filtered_lines)
 
     def _build_system_prompt(self) -> str:
-        return f"""{self.identity}
-
-## How You See Others
-
-{self.personas}
-
-## Your Memories
-
-{self.memory}
-
-## Group Context
-
-{self.group_memories}
-
-## Protocol
-
-{self.protocol}
-"""
+        sections = [self.identity.strip()]
+        if self.personas.strip():
+            sections.append("## How You See Others\n\n" + self.personas.strip())
+        if self.memory.strip():
+            sections.append("## Your Memories\n\n" + self.memory.strip())
+        if self.group_memories.strip():
+            sections.append("## Group Context\n\n" + self.group_memories.strip())
+        sections.append("## Protocol\n\n" + self.protocol.strip())
+        return "\n\n".join(sections) + "\n"
 
     def append_user_message(self, content: str) -> None:
         self.messages.append({"role": "user", "content": content})
@@ -83,15 +100,13 @@ class Agent:
     def append_assistant_message(self, content: str) -> None:
         self.messages.append({"role": "assistant", "content": content})
 
-    def add_held_thought(self, turn: int, reason: str) -> None:
-        """Called by orchestrator when this agent claimed SPEAK but lost the floor."""
-        self.held_thoughts.append(f"turn {turn}: {reason}")
-        if len(self.held_thoughts) > config.MAX_HELD_THOUGHTS:
-            self.held_thoughts.pop(0)
-
-    def clear_held_thoughts(self) -> None:
-        """Called after this agent wins and speaks."""
-        self.held_thoughts = []
+    def record_thought(self, turn: int, spoke: bool, thought: str) -> None:
+        """Record this agent's inner thought from this turn (whether they spoke or held)."""
+        if not thought:
+            return
+        self.thought_history.append({"turn": turn, "spoke": spoke, "thought": thought})
+        if len(self.thought_history) > config.MAX_THOUGHT_HISTORY:
+            self.thought_history.pop(0)
 
     def _build_input_list(self) -> list:
         """Convert self.messages to /v1/responses input format."""
@@ -138,8 +153,9 @@ class Agent:
     async def call_decision(self) -> dict:
         """
         Phase 1 call. Orchestrator has already appended the decision user message.
-        Returns parsed decision dict: {"decision": "HOLD"} or
-        {"decision": "SPEAK", "urgency": float, "reason": str}
+        Returns parsed decision dict:
+          {"decision": "HOLD", "inner_thought": str} or
+          {"decision": "SPEAK", "urgency": float, "inner_thought": str}
         Appends exactly one assistant message.
         """
         data = self._post(max_tokens=config.DECISION_MAX_TOKENS)
@@ -152,27 +168,36 @@ class Agent:
             clean = decision_text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             result = json.loads(clean)
         except json.JSONDecodeError:
-            result = {"decision": "HOLD"}
+            result = {"decision": "HOLD", "inner_thought": ""}
+
+        # Backward-compat: accept "reason" if model still uses old key
+        inner_thought = result.get("inner_thought", result.get("reason", ""))
 
         return {
             "name": self.name,
             "decision": result.get("decision", "HOLD"),
             "urgency": float(result.get("urgency", 0)),
-            "reason": result.get("reason", ""),
+            "inner_thought": inner_thought,
             "raw_output": decision_text,
             "usage": data.get("usage", {})
         }
 
-    async def call_response(self, intent: str) -> dict:
+    async def call_response(self, inner_thought: str) -> dict:
         """
         Phase 2 call. Only invoked on the winning agent.
         Appends exactly one user message (intent injection) then exactly one assistant message.
         Returns parsed {"response": "..."}.
         """
         intent_msg = json.dumps({
-            "instruction": "You won the floor. Generate your actual message now. Reply with a single raw JSON object starting with { and ending with }. No markdown, no code fences, no extra text.",
-            "your_intent": intent,
-            "format": '{"response": "your message here"}'
+            "instruction": (
+                "You won the floor. Now generate the actual MESSAGE you say out loud to the group, "
+                "based on your inner thought below. Speak in character — do NOT just paraphrase the inner thought. "
+                "Inner thought is private; the response is what others hear. "
+                "Reply with a single raw JSON object starting with { and ending with }. "
+                "No markdown, no code fences, no extra text."
+            ),
+            "your_inner_thought": inner_thought,
+            "format": '{"response": "what you say out loud to the group"}'
         }, ensure_ascii=False)
 
         # Append intent injection user message (invariant: exactly one)

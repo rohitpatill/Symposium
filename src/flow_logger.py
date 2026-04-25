@@ -53,11 +53,11 @@ def error(label: str, exc=None):
         _write(f"ERROR | {type(exc).__name__}: {exc}")
 
 
-def decision(turn: int, name: str, decision: str, urgency: float = 0, reason: str = ""):
+def decision(turn: int, name: str, decision: str, urgency: float = 0, inner_thought: str = ""):
     if decision == "SPEAK":
-        _write(f"DEC   | turn={turn} agent={name} SPEAK urgency={urgency:.2f} reason={reason!r}")
+        _write(f"DEC   | turn={turn} agent={name} SPEAK urgency={urgency:.2f} thought={inner_thought!r}")
     else:
-        _write(f"DEC   | turn={turn} agent={name} HOLD")
+        _write(f"DEC   | turn={turn} agent={name} HOLD thought={inner_thought!r}")
 
 
 def floor(turn: int, winner: str, urgency: float, all_speakers: list):

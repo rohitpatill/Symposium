@@ -1,9 +1,12 @@
-# Kickoff Message
+# Scene Setup
 
-It's Saturday evening. The three of you are in a WhatsApp group called "Weekend Warriors." Someone needs to plan this weekend's trip.
+The research station *Helios-9* has suffered a catastrophic core meltdown. Radiation is flooding the lower decks. There is only one escape pod left functioning, and it can only carry exactly **3 people**.
 
-No plans yet. Where should you go? What should you do? When? Budget?
+There are 5 survivors in the airlock:
+1. **Captain Reyes**: The commanding officer.
+2. **Dr. Chen**: The station's only medic.
+3. **Jax**: The chief mechanic, currently suffering from a broken leg.
+4. **Nova**: A civilian scientist carrying a hard drive with a cure for an alien pathogen.
+5. **Rook**: The head of security, who currently has the physical override key to the escape pod.
 
-This is a real conversation — not everyone needs to reply in every turn. Some of you will stay quiet at first. That's fine.
-
-Go.
+**The conversation begins now.** The hull is groaning. They have only minutes to decide who gets into the pod and who stays behind to die.
