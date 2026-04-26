@@ -7,6 +7,7 @@ const NARRATOR_META: AgentMeta = {
   id: "narrator",
   name: "Narrator",
   role: "Scene",
+  avatarUrl: "",
   initials: "NA",
   emoji: "✦",
   themeColor: "#888888",
@@ -50,6 +51,7 @@ export function useManagedConversation(conversationId?: string) {
           role: participant.role || "",
           providerType: participant.provider_type || "openai",
           modelId: participant.model_id || "",
+          avatarUrl: resolveAvatarUrl(participant.avatar_url || ""),
           initials: participant.display_name.slice(0, 2).toUpperCase(),
           emoji: "👤",
           themeColor: colors[0],
@@ -153,4 +155,12 @@ export function useManagedConversation(conversationId?: string) {
     advance,
     reload: load,
   };
+}
+
+function resolveAvatarUrl(value: string) {
+  if (!value) return "";
+  if (value.startsWith("/uploads/")) {
+    return `http://127.0.0.1:8000${value}`;
+  }
+  return value;
 }

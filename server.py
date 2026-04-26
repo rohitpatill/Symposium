@@ -1,9 +1,12 @@
 from datetime import datetime
 from pathlib import Path
+import json
 import re
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import config
@@ -34,6 +37,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+UPLOADS_DIR = Path(config.BASE_DIR) / "uploads"
+AGENT_AVATAR_UPLOADS_DIR = UPLOADS_DIR / "agent-avatars"
+AGENT_AVATAR_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+
 global_orchestrator = None
 
 
@@ -56,6 +64,7 @@ class AgentMemoryIn(BaseModel):
 
 class AgentIn(BaseModel):
     display_name: str
+    avatar_url: str = ""
     provider_config_id: int | None = None
     provider_type: str = "openai"
     model_id: str = ""
@@ -94,6 +103,7 @@ class TeamUpdateIn(TeamCreateIn):
 
 class AgentQuickUpdateIn(BaseModel):
     display_name: str = Field(min_length=1)
+    avatar_url: str = ""
     provider_config_id: int
     model_id: str = Field(min_length=1)
     role: str = ""
@@ -122,6 +132,17 @@ class ProviderConfigCreateIn(BaseModel):
     api_key: str
 
 
+class TeamBuilderMessageIn(BaseModel):
+    role: str
+    content: str
+
+
+class TeamBuilderChatIn(BaseModel):
+    provider_config_id: int
+    model_id: str
+    messages: list[TeamBuilderMessageIn] = Field(default_factory=list)
+
+
 def timestamp_slug() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -134,6 +155,7 @@ def build_agent_meta(agent_id: str, name: str, role: str, idx: int, provider_typ
         "role": role if len(role) <= 30 else role[:27] + "...",
         "providerType": provider_type,
         "modelId": model_id,
+        "avatarUrl": "",
         "initials": name[:2].upper(),
         "emoji": "👤",
         **color_info,
@@ -144,6 +166,150 @@ def default_model_for_provider(provider_type: str) -> str:
     catalog = PROVIDER_CATALOG.get(provider_type, {})
     models = catalog.get("models", [])
     return models[0]["model_id"] if models else ""
+
+
+def normalize_avatar_url(value: str) -> str:
+    avatar_url = (value or "").strip()
+    if not avatar_url:
+        return ""
+    if avatar_url.startswith("http://") or avatar_url.startswith("https://") or avatar_url.startswith("/uploads/"):
+        return avatar_url
+    raise HTTPException(status_code=400, detail="Agent avatar must be a public image URL or an uploaded local image.")
+
+
+TEAM_BUILDER_INTERVIEW_SYSTEM_PROMPT = """
+You are Symposium AI, a careful team-building assistant for multi-agent discussions.
+
+Your job is to help a user design a managed Symposium team through a short, focused interview.
+
+What you need before the team is ready:
+- team name
+- short team description
+- scenario template or discussion topic
+- between 2 and 11 agents
+- for each agent:
+  - display name
+  - role
+  - core personality
+  - talkativeness guidance
+  - speech style
+  - private goal
+  - values
+  - handling defeat
+  - urgency tendency
+  - personal memory
+- that agent's private view of the other important agents (personas)
+- whether the agent has any notable private history with other agents
+- any shared group memories, alliances, tensions, or prior incidents involving all agents or a subset
+
+Behavior rules:
+- Ask one concise, high-value question at a time.
+- If the user already gave enough detail for a category, do not ask for it again.
+- If details are missing, ask for the most decision-shaping missing information first.
+- Do not mark the team ready until you have explicitly checked for:
+  - personas between key agents
+  - group memories or subgroup history
+  - whether there are any important hidden alliances, grudges, loyalties, or prior incidents
+- If the user says there are no personas or no group memories, accept that and record it as intentionally absent.
+- Be practical and collaborative, not theatrical.
+- Once you have enough information to build a high-quality team, set ready_to_build to true.
+- Even when ready_to_build is true, you may briefly summarize what you believe you have captured.
+- Output exactly one JSON object and nothing else.
+- Do not wrap the JSON in markdown fences.
+- Do not include commentary before or after the JSON.
+- Ensure every string is properly closed and escaped for valid JSON.
+- Keep `assistant_message` concise enough to avoid truncation.
+
+Return only JSON with this shape:
+{
+  "assistant_message": "your next question or summary",
+  "ready_to_build": true or false,
+  "missing_information": ["short item", "..."],
+  "captured_summary": {
+    "team_name": "...",
+    "topic": "...",
+    "agent_count": 6,
+    "known_roles": ["...", "..."]
+  }
+}
+
+Your response must be parseable by a strict JSON parser on the first try.
+""".strip()
+
+
+TEAM_BUILDER_BUILD_SYSTEM_PROMPT = """
+You are Symposium AI, and your job is to convert a natural-language planning conversation into a valid managed Symposium team payload.
+
+You must produce exactly one JSON object matching this schema:
+{
+  "name": "string",
+  "description": "string",
+  "agents": [
+    {
+      "display_name": "string",
+      "provider_config_id": 123,
+      "provider_type": "openai|gemini|anthropic",
+      "model_id": "string",
+      "role": "string",
+      "core_personality": "string",
+      "talkativeness": 0.65,
+      "speech_style": "string",
+      "private_goal": "string",
+      "values_text": "string",
+      "handling_defeat": "string",
+      "urgency_tendency": "string",
+      "extra_notes": "string",
+      "personal_memory": "string",
+      "memories": [
+        {
+          "type": "string",
+          "target_agent_slug": "string or null",
+          "title": "string",
+          "content": "string"
+        }
+      ],
+      "personas": {
+        "other-agent-slug": "string"
+      }
+    }
+  ],
+  "group_memories": [
+    {
+      "title": "string",
+      "content": "string",
+      "participant_slugs": ["slug-a", "slug-b"],
+      "is_general": true
+    }
+  ],
+  "scenario_template": "string"
+}
+
+Hard rules:
+- Between 2 and 11 agents.
+- Every agent must have a non-empty display_name, provider_config_id, and model_id.
+- provider_config_id and model_id must come from the provided live provider inventory.
+- provider_type must match the chosen provider_config_id.
+- Agent names must be unique.
+- Keep talkativeness between 0.0 and 1.0.
+- Use empty arrays or empty objects instead of null for memories/personas/group_memories.
+- Scenario template should be concrete and usable as the kickoff for a fresh conversation.
+- Output exactly one JSON object and nothing else.
+- Do not wrap the JSON in markdown fences.
+- Do not include notes, explanations, or prose before or after the JSON.
+- Ensure every string is properly escaped and every object/array is properly closed.
+
+Quality rules:
+- Make agents socially distinct.
+- Vary talkativeness.
+- If the conversation provides personas between agents, preserve them in the output.
+- If the conversation provides shared or subgroup history, convert it into `group_memories`.
+- If the conversation mentions one agent's private history with another, use either `personas`, `memories`, or both in the most natural way.
+- Do not silently drop personas or group-memory details that the user supplied.
+- If the user did not specify personas or group memories, you may add a light amount only when it clearly improves the scenario and remains realistic.
+- If the user underspecified details, make thoughtful, realistic choices that strengthen the scenario.
+
+Return only valid JSON that a strict parser can consume immediately.
+""".strip()
 
 
 def default_runtime_provider() -> tuple[str, str, str]:
@@ -183,6 +349,45 @@ def provider_type_for_agent(conn, provider_config_id: int | None) -> str:
         (provider_config_id,),
     ).fetchone()
     return row["provider_type"] if row else config.DEFAULT_PROVIDER
+
+
+def get_validated_provider_config(conn, provider_config_id: int) -> dict:
+    row = row_to_dict(conn.execute(
+        """
+        SELECT id, provider_type, display_name, api_key_ciphertext
+        FROM llm_provider_configs
+        WHERE id = ? AND is_valid = 1
+        """,
+        (provider_config_id,),
+    ).fetchone())
+    if not row:
+        raise HTTPException(status_code=400, detail="Choose a validated provider for Symposium AI.")
+    if not row.get("api_key_ciphertext"):
+        raise HTTPException(status_code=400, detail="Selected provider has no saved managed API key.")
+    return row
+
+
+def builder_provider_inventory(conn) -> list[dict]:
+    providers = rows_to_dicts(conn.execute(
+        "SELECT id, provider_type, display_name FROM llm_provider_configs WHERE is_valid = 1 ORDER BY provider_type, id"
+    ).fetchall())
+    inventory: list[dict] = []
+    for provider in providers:
+        catalog = PROVIDER_CATALOG.get(provider["provider_type"], {})
+        inventory.append({
+            "provider_config_id": provider["id"],
+            "provider_type": provider["provider_type"],
+            "display_name": provider["display_name"],
+            "models": catalog.get("models", []),
+        })
+    return inventory
+
+
+def validate_builder_model(provider_type: str, model_id: str) -> None:
+    catalog = PROVIDER_CATALOG.get(provider_type, {})
+    model_ids = {model["model_id"] for model in catalog.get("models", [])}
+    if model_id not in model_ids:
+        raise HTTPException(status_code=400, detail=f"Model {model_id} is not available for provider {provider_type}.")
 
 
 def parse_identity_markdown(content: str, fallback_name: str) -> dict:
@@ -420,6 +625,7 @@ def build_managed_simulation(conversation_id: int) -> dict:
             "provider_type": provider_type,
             "model_id": participant.get("model_id") or default_model_for_provider(provider_type) or default_model,
             "api_key": decrypt_secret(provider_row["api_key_ciphertext"]) if provider_row and provider_row.get("api_key_ciphertext") else default_api_key,
+            "avatar_url": participant.get("avatar_url", ""),
             "identity": participant["identity_md"],
             "memory": participant["memory_md"],
             "personas": participant["personas_md"],
@@ -440,7 +646,7 @@ def team_summary(team_id: int) -> dict:
         agents = rows_to_dicts(conn.execute(
             """
             SELECT ta.id, ta.slug, ta.display_name, ta.provider_config_id, COALESCE(lp.provider_type, 'openai') AS provider_type,
-                   ta.model_id, ta.role, ta.core_personality, ta.talkativeness, ta.speech_style,
+                   ta.model_id, ta.avatar_url, ta.role, ta.core_personality, ta.talkativeness, ta.speech_style,
                    ta.private_goal, ta.values_text, ta.handling_defeat, ta.urgency_tendency, ta.extra_notes, ta.sort_order
             FROM team_agents ta
             LEFT JOIN llm_provider_configs lp ON lp.id = ta.provider_config_id
@@ -617,14 +823,15 @@ def write_team(team_id: int, payload: TeamCreateIn) -> None:
             cursor = conn.execute(
                 """
                 INSERT INTO team_agents
-                (team_id, slug, display_name, provider_config_id, model_id, role, core_personality, talkativeness, speech_style,
+                (team_id, slug, display_name, avatar_url, provider_config_id, model_id, role, core_personality, talkativeness, speech_style,
                  private_goal, values_text, handling_defeat, urgency_tendency, extra_notes, sort_order, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 (
                     team_id,
                     slug,
                     agent.display_name,
+                    normalize_avatar_url(agent.avatar_url),
                     agent.provider_config_id,
                     agent.model_id,
                     agent.role,
@@ -776,6 +983,112 @@ async def list_provider_configs():
     return {"status": "ok", "providers": providers, "catalog": PROVIDER_CATALOG}
 
 
+@app.post("/api/managed/uploads/agent-avatar")
+async def upload_agent_avatar(file: UploadFile = File(...)):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file for the agent avatar.")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        raise HTTPException(status_code=400, detail="Supported avatar formats are PNG, JPG, WEBP, and GIF.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded avatar file was empty.")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Avatar image must be 5 MB or smaller.")
+    filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex}{suffix}"
+    destination = AGENT_AVATAR_UPLOADS_DIR / filename
+    destination.write_bytes(content)
+    return {"status": "ok", "avatar_url": f"/uploads/agent-avatars/{filename}"}
+
+
+@app.post("/api/managed/team-builder/chat")
+async def team_builder_chat(payload: TeamBuilderChatIn):
+    with get_conn() as conn:
+        provider_config = get_validated_provider_config(conn, payload.provider_config_id)
+        validate_builder_model(provider_config["provider_type"], payload.model_id)
+        inventory = builder_provider_inventory(conn)
+    provider = get_provider(provider_config["provider_type"])
+    messages = [
+        {"role": message.role, "content": message.content}
+        for message in payload.messages
+        if message.content.strip()
+    ]
+    inventory_text = json.dumps(inventory, ensure_ascii=True)
+    prompt_messages = list(messages)
+    prompt_messages.append({
+        "role": "user",
+        "content": f"Live provider inventory for future team creation: {inventory_text}",
+    })
+    result = provider.generate_json(
+        api_key=decrypt_secret(provider_config["api_key_ciphertext"]),
+        model=payload.model_id,
+        system_prompt=TEAM_BUILDER_INTERVIEW_SYSTEM_PROMPT,
+        messages=prompt_messages,
+        max_tokens=600,
+        cache_key=f"team-builder-chat-{provider_config['provider_type']}-{payload.model_id}",
+    )
+    try:
+        data = json.loads(result["text"])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Symposium AI had trouble formatting its response. Please try again.") from exc
+    return {
+        "status": "ok",
+        "assistant_message": data.get("assistant_message", "").strip(),
+        "ready_to_build": bool(data.get("ready_to_build")),
+        "missing_information": data.get("missing_information", []),
+        "captured_summary": data.get("captured_summary", {}),
+    }
+
+
+@app.post("/api/managed/team-builder/build")
+async def team_builder_build(payload: TeamBuilderChatIn):
+    with get_conn() as conn:
+        if validated_provider_count(conn) < 1:
+            raise HTTPException(status_code=400, detail="Validate at least one provider before using Symposium AI.")
+        provider_config = get_validated_provider_config(conn, payload.provider_config_id)
+        validate_builder_model(provider_config["provider_type"], payload.model_id)
+        inventory = builder_provider_inventory(conn)
+    provider = get_provider(provider_config["provider_type"])
+    user_messages = [
+        {"role": message.role, "content": message.content}
+        for message in payload.messages
+        if message.content.strip()
+    ]
+    inventory_text = json.dumps(inventory, ensure_ascii=True)
+    build_messages = list(user_messages)
+    build_messages.append({
+        "role": "user",
+        "content": f"Use this live provider inventory when assigning provider_config_id and model_id: {inventory_text}",
+    })
+    result = provider.generate_json(
+        api_key=decrypt_secret(provider_config["api_key_ciphertext"]),
+        model=payload.model_id,
+        system_prompt=TEAM_BUILDER_BUILD_SYSTEM_PROMPT,
+        messages=build_messages,
+        max_tokens=4000,
+        cache_key=f"team-builder-build-{provider_config['provider_type']}-{payload.model_id}",
+    )
+    try:
+        raw_payload = json.loads(result["text"])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Symposium AI had trouble formatting the team payload. Please try again.") from exc
+    try:
+        team_payload = TeamCreateIn(**raw_payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Symposium AI generated an invalid team payload: {exc}") from exc
+    if not 2 <= len(team_payload.agents) <= 11:
+        raise HTTPException(status_code=400, detail="Symposium AI generated a team outside the supported 2-11 agent range.")
+    with get_conn() as conn:
+        validate_agent_provider_assignments(conn, team_payload.agents)
+        cursor = conn.execute(
+            "INSERT INTO teams (name, description) VALUES (?, ?)",
+            (team_payload.name.strip(), team_payload.description.strip()),
+        )
+        team_id = cursor.lastrowid
+    write_team(team_id, team_payload)
+    return {"status": "ok", "team": team_summary(team_id), "generated_payload": raw_payload}
+
+
 @app.post("/api/managed/providers")
 async def create_provider_config(payload: ProviderConfigCreateIn):
     if payload.provider_type not in PROVIDER_CATALOG:
@@ -902,13 +1215,14 @@ async def quick_update_team_agent(team_id: int, agent_slug: str, payload: AgentQ
         conn.execute(
             """
             UPDATE team_agents
-            SET slug = ?, display_name = ?, provider_config_id = ?, model_id = ?, role = ?,
+            SET slug = ?, display_name = ?, avatar_url = ?, provider_config_id = ?, model_id = ?, role = ?,
                 core_personality = ?, talkativeness = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
             (
                 next_slug,
                 payload.display_name.strip(),
+                normalize_avatar_url(payload.avatar_url),
                 payload.provider_config_id,
                 payload.model_id.strip(),
                 payload.role.strip(),
@@ -1079,8 +1393,8 @@ async def create_conversation(team_id: int, payload: ConversationCreateIn):
             participant_id = conn.execute(
                 """
                 INSERT INTO conversation_participants
-                (conversation_id, team_agent_id, slot_index, slug, display_name, provider_type, provider_config_id, model_id, identity_md, memory_md, personas_md, sort_order)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (conversation_id, team_agent_id, slot_index, slug, display_name, avatar_url, provider_type, provider_config_id, model_id, identity_md, memory_md, personas_md, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -1088,6 +1402,7 @@ async def create_conversation(team_id: int, payload: ConversationCreateIn):
                     idx,
                     agent["slug"],
                     agent["display_name"],
+                    agent.get("avatar_url", ""),
                     provider_type_for_agent(conn, agent["provider_config_id"]),
                     agent["provider_config_id"],
                     agent["model_id"] or default_model_for_provider(provider_type_for_agent(conn, agent["provider_config_id"])),

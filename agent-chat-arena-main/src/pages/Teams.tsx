@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 function blankAgent(name = ""): ManagedAgentDraft {
   return {
     display_name: name,
+    avatar_url: "",
     provider_config_id: null,
     provider_type: "openai",
     model_id: "",
@@ -39,6 +40,26 @@ function blankAgent(name = ""): ManagedAgentDraft {
     personas: {},
   };
 }
+
+function resolveManagedAssetUrl(value?: string | null) {
+  if (!value) return "";
+  if (value.startsWith("/uploads/")) {
+    return `http://127.0.0.1:8000${value}`;
+  }
+  return value;
+}
+
+function truncateText(value?: string | null, limit = 90) {
+  const text = (value || "").trim();
+  if (!text) return "No personality summary yet.";
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).trimEnd()}...`;
+}
+
+type BuilderChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
 
 export default function TeamsPage() {
   const { teamId } = useParams();
@@ -81,6 +102,17 @@ export default function TeamsPage() {
   const [providerSuccess, setProviderSuccess] = useState<string | null>(null);
   const [providerValidating, setProviderValidating] = useState(false);
   const [modelPickerAgentIndex, setModelPickerAgentIndex] = useState<number | null>(null);
+  const [createMode, setCreateMode] = useState<"manual" | "ai" | null>(null);
+  const [builderProviderConfigId, setBuilderProviderConfigId] = useState<number | null>(null);
+  const [builderProviderType, setBuilderProviderType] = useState("openai");
+  const [builderModelId, setBuilderModelId] = useState("");
+  const [builderMessages, setBuilderMessages] = useState<BuilderChatMessage[]>([]);
+  const [builderInput, setBuilderInput] = useState("");
+  const [builderLoading, setBuilderLoading] = useState(false);
+  const [builderReady, setBuilderReady] = useState(false);
+  const [builderMissing, setBuilderMissing] = useState<string[]>([]);
+  const [builderSummary, setBuilderSummary] = useState<Record<string, unknown> | null>(null);
+  const [avatarUploadingIndex, setAvatarUploadingIndex] = useState<number | null>(null);
 
   async function loadTeams() {
     const res = await fetch("/api/managed/teams");
@@ -103,6 +135,7 @@ export default function TeamsPage() {
       agents: data.agents,
       conversations: data.conversations,
       scenarioTemplate: data.scenarioTemplate,
+      groupMemories: data.groupMemories,
     });
   }
 
@@ -129,6 +162,19 @@ export default function TeamsPage() {
     () => agents.every((agent) => agent.provider_config_id && agent.model_id.trim()),
     [agents],
   );
+  const builderModelOptions = useMemo(
+    () => providerCatalog[builderProviderType]?.models || [],
+    [builderProviderType, providerCatalog],
+  );
+
+  useEffect(() => {
+    if (!builderProviderConfigId && validatedProviders.length > 0) {
+      const firstProvider = validatedProviders[0];
+      setBuilderProviderConfigId(firstProvider.id);
+      setBuilderProviderType(firstProvider.provider_type);
+      setBuilderModelId(providerCatalog[firstProvider.provider_type]?.models?.[0]?.model_id || "");
+    }
+  }, [builderProviderConfigId, providerCatalog, validatedProviders]);
 
   async function createTeam() {
     if (!hasValidatedProvider) {
@@ -207,6 +253,121 @@ export default function TeamsPage() {
     await loadProviders();
   }
 
+  async function uploadAgentAvatar(agentIndex: number, file: File) {
+    const formData = new FormData();
+    formData.append("file", file);
+    setAvatarUploadingIndex(agentIndex);
+    try {
+      const res = await fetch("/api/managed/uploads/agent-avatar", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Could not upload avatar.");
+      }
+      setAgents((prev) =>
+        prev.map((agent, idx) =>
+          idx === agentIndex ? { ...agent, avatar_url: data.avatar_url || "" } : agent,
+        ),
+      );
+    } catch (error) {
+      setConfirmState({
+        title: "Could not upload avatar",
+        description: error instanceof Error ? error.message : "The selected image could not be uploaded.",
+        actionLabel: "Close",
+      });
+      setConfirmOpen(true);
+    } finally {
+      setAvatarUploadingIndex(null);
+    }
+  }
+
+  function resetBuilderState() {
+    const firstProvider = validatedProviders[0];
+    const nextProviderType = firstProvider?.provider_type || "openai";
+    setBuilderProviderConfigId(firstProvider?.id ?? null);
+    setBuilderProviderType(nextProviderType);
+    setBuilderModelId(providerCatalog[nextProviderType]?.models?.[0]?.model_id || "");
+    setBuilderMessages([]);
+    setBuilderInput("");
+    setBuilderLoading(false);
+    setBuilderReady(false);
+    setBuilderMissing([]);
+    setBuilderSummary(null);
+  }
+
+  async function runBuilderInterview(messages: BuilderChatMessage[]) {
+    if (!builderProviderConfigId || !builderModelId) return;
+    setBuilderLoading(true);
+    const res = await fetch("/api/managed/team-builder/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider_config_id: builderProviderConfigId,
+        model_id: builderModelId,
+        messages,
+      }),
+    });
+    const data = await res.json();
+    setBuilderLoading(false);
+    if (!res.ok) {
+      setConfirmState({
+        title: "Symposium AI hit a wall",
+        description: data.detail || "The AI builder could not continue. Please try again.",
+        actionLabel: "Try again",
+      });
+      setConfirmOpen(true);
+      return;
+    }
+    setBuilderMessages([...messages, { role: "assistant", content: data.assistant_message }]);
+    setBuilderReady(Boolean(data.ready_to_build));
+    setBuilderMissing(Array.isArray(data.missing_information) ? data.missing_information : []);
+    setBuilderSummary(data.captured_summary || null);
+  }
+
+  async function startBuilderInterview() {
+    await runBuilderInterview([]);
+  }
+
+  async function sendBuilderMessage() {
+    const content = builderInput.trim();
+    if (!content || builderLoading) return;
+    const messages = [...builderMessages, { role: "user" as const, content }];
+    setBuilderMessages(messages);
+    setBuilderInput("");
+    await runBuilderInterview(messages);
+  }
+
+  async function buildTeamWithSymposiumAI() {
+    if (!builderProviderConfigId || !builderModelId || builderMessages.length === 0) return;
+    setBuilderLoading(true);
+    const res = await fetch("/api/managed/team-builder/build", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider_config_id: builderProviderConfigId,
+        model_id: builderModelId,
+        messages: builderMessages,
+      }),
+    });
+    const data = await res.json();
+    setBuilderLoading(false);
+    if (!res.ok) {
+      setConfirmState({
+        title: "Could not build team",
+        description: data.detail || "Symposium AI could not convert the conversation into a valid team. Please try again.",
+        actionLabel: "Try again",
+      });
+      setConfirmOpen(true);
+      return;
+    }
+    setOpen(false);
+    setCreateMode(null);
+    await loadTeams();
+    navigate(`/teams/${data.team.team.id}`);
+  }
+
   async function deleteProvider(provider: ProviderConfigSummary) {
     setConfirmState({
       title: `Delete ${provider.display_name}?`,
@@ -279,6 +440,7 @@ export default function TeamsPage() {
     setAgents(detail.agents.map((agent) => ({
       ...blankAgent(agent.display_name),
       display_name: agent.display_name,
+      avatar_url: agent.avatar_url || "",
       provider_config_id: agent.provider_config_id ?? null,
       provider_type: agent.provider_type ?? "openai",
       model_id: agent.model_id ?? "",
@@ -354,10 +516,15 @@ export default function TeamsPage() {
     setScenarioTemplate("");
     setAgents([blankAgent(""), blankAgent("")]);
     setGroupMemories([]);
+    setCreateMode(null);
     setCreateStep(0);
     setActiveAgentIndex(0);
+    resetBuilderState();
     setOpen(true);
   }
+
+  const showCreateModeChoice = !editing && createMode === null;
+  const usingAiBuilder = !editing && createMode === "ai";
 
   return (
     <div className="min-h-screen px-4 py-6 sm:px-8">
@@ -384,7 +551,7 @@ export default function TeamsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="mx-auto grid w-full max-w-[1800px] gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
         <aside className="rounded-[24px] border border-border/60 glass-strong p-5">
           <div className="flex items-center justify-between">
             <div>
@@ -495,20 +662,181 @@ export default function TeamsPage() {
                 </DialogTrigger>
               <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto border-border/60 glass-strong">
                 <DialogHeader>
-                  <DialogTitle>{editing ? "Edit team" : "Create team"}</DialogTitle>
+                  <DialogTitle>
+                    {editing ? "Edit team" : usingAiBuilder ? "Create team with Symposium AI" : "Create team"}
+                  </DialogTitle>
                   <DialogDescription>
-                    Build this step by step so the setup feels guided instead of overwhelming.
+                    {editing
+                      ? "Build this step by step so the setup feels guided instead of overwhelming."
+                      : usingAiBuilder
+                        ? "Let Symposium AI interview you, turn the conversation into a structured team, and build it for managed mode."
+                        : createMode === "manual"
+                          ? "Build this step by step so the setup feels guided instead of overwhelming."
+                          : "Choose whether you want to build the team manually or with Symposium AI."}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-6">
-                  <div className="flex gap-2">
-                    {["Team", "Names", "Agents", "Group", "Scenario"].map((label, index) => (
-                      <div key={label} className={`rounded-full px-3 py-1 text-xs ${index === createStep ? "bg-primary text-primary-foreground" : "bg-muted/50 text-muted-foreground"}`}>
-                        {index + 1}. {label}
-                      </div>
-                    ))}
-                  </div>
+                  {!showCreateModeChoice && !usingAiBuilder && (
+                    <div className="flex gap-2">
+                      {["Team", "Names", "Agents", "Group", "Scenario"].map((label, index) => (
+                        <div key={label} className={`rounded-full px-3 py-1 text-xs ${index === createStep ? "bg-primary text-primary-foreground" : "bg-muted/50 text-muted-foreground"}`}>
+                          {index + 1}. {label}
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
+                  {showCreateModeChoice && (
+                    <section className="grid gap-4 md:grid-cols-2">
+                      <button
+                        type="button"
+                        className="rounded-2xl border border-border/60 bg-background/30 p-5 text-left transition-colors hover:border-primary/40"
+                        onClick={() => setCreateMode("manual")}
+                      >
+                        <div className="font-display text-xl font-semibold">Add manually</div>
+                        <p className="mt-3 text-sm leading-7 text-muted-foreground">
+                          Walk through the full Symposium setup wizard yourself and control every field directly.
+                        </p>
+                      </button>
+                      <div className="rounded-2xl border border-border/60 bg-background/30 p-5">
+                        <div className="font-display text-xl font-semibold">Add using Symposium AI</div>
+                        <p className="mt-3 text-sm leading-7 text-muted-foreground">
+                          Let the builder ask focused questions, shape the cast, and generate the managed payload for you.
+                        </p>
+                        <div className="mt-4 grid gap-4">
+                          <Field label="Builder provider" hint="This is the provider Symposium AI uses while interviewing and generating the team.">
+                            <select
+                              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                              value={String(builderProviderConfigId ?? "")}
+                              onChange={(e) => {
+                                const providerId = e.target.value ? Number(e.target.value) : null;
+                                const provider = validatedProviders.find((item) => item.id === providerId);
+                                const nextType = provider?.provider_type || "openai";
+                                setBuilderProviderConfigId(providerId);
+                                setBuilderProviderType(nextType);
+                                setBuilderModelId(providerCatalog[nextType]?.models?.[0]?.model_id || "");
+                              }}
+                            >
+                              {validatedProviders.map((provider) => (
+                                <option key={provider.id} value={provider.id}>
+                                  {provider.display_name} ({provider.provider_type})
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                          <Field label="Builder model" hint="Pick the model that should conduct the interview and generate the final team JSON.">
+                            <select
+                              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                              value={builderModelId}
+                              onChange={(e) => setBuilderModelId(e.target.value)}
+                            >
+                              {builderModelOptions.map((model) => (
+                                <option key={model.model_id} value={model.model_id}>
+                                  {model.name}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                        </div>
+                        <div className="mt-5 flex justify-end">
+                          <Button
+                            onClick={async () => {
+                              setCreateMode("ai");
+                              setBuilderMessages([]);
+                              setBuilderReady(false);
+                              setBuilderMissing([]);
+                              setBuilderSummary(null);
+                              await startBuilderInterview();
+                            }}
+                            disabled={!builderProviderConfigId || !builderModelId}
+                          >
+                            Start with Symposium AI
+                          </Button>
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
+                  {usingAiBuilder && (
+                    <section className="space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-background/30 px-4 py-3">
+                        <div className="text-sm text-muted-foreground">
+                          Builder using <span className="text-foreground">{builderProviderType}</span> / <span className="text-foreground">{builderModelId}</span>
+                        </div>
+                        <Button variant="secondary" onClick={() => setCreateMode(null)} disabled={builderLoading}>
+                          Back
+                        </Button>
+                      </div>
+                      <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                        <div className="space-y-3">
+                          {builderMessages.map((message, index) => (
+                            <div
+                              key={index}
+                              className={`rounded-2xl px-4 py-3 text-sm leading-7 ${
+                                message.role === "assistant"
+                                  ? "border border-primary/20 bg-primary/10 text-foreground"
+                                  : "border border-border/50 bg-card/40 text-foreground"
+                              }`}
+                            >
+                              <div className="mb-1 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                                {message.role === "assistant" ? "Symposium AI" : "You"}
+                              </div>
+                              <div className="whitespace-pre-wrap">{message.content}</div>
+                            </div>
+                          ))}
+                          {builderLoading && (
+                            <div className="flex items-center gap-3 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary">
+                              <LoaderCircle className="h-4 w-4 animate-spin" />
+                              Symposium AI is thinking...
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-4 space-y-3">
+                          <Textarea
+                            value={builderInput}
+                            onChange={(e) => setBuilderInput(e.target.value)}
+                            placeholder={
+                              builderReady
+                                ? "Symposium AI has enough information and is ready to build the team."
+                                : "Describe the team, answer the current question, or add missing context."
+                            }
+                            className="min-h-28"
+                            disabled={builderReady || builderLoading}
+                          />
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="text-xs text-muted-foreground">
+                              {builderReady
+                                ? "Enough information has been collected. The next step is to build the team."
+                                : builderMissing.length > 0
+                                  ? `Still missing: ${builderMissing.join(", ")}`
+                                  : "Answer naturally. Symposium AI will keep asking only what it still needs."}
+                            </div>
+                            {builderReady ? (
+                              <Button
+                                onClick={() => void buildTeamWithSymposiumAI()}
+                                disabled={builderLoading || builderMessages.length === 0}
+                              >
+                                Build team
+                              </Button>
+                            ) : (
+                              <Button onClick={() => void sendBuilderMessage()} disabled={!builderInput.trim() || builderLoading}>
+                                Send
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      {builderSummary && (
+                        <div className="rounded-2xl border border-border/60 bg-background/30 p-4 text-sm text-muted-foreground">
+                          <div className="mb-2 font-medium text-foreground">Captured summary</div>
+                          <pre className="whitespace-pre-wrap text-xs leading-6">{JSON.stringify(builderSummary, null, 2)}</pre>
+                        </div>
+                      )}
+                    </section>
+                  )}
+
+                  {!showCreateModeChoice && !usingAiBuilder && (
+                    <>
                   {createStep === 0 && (
                     <section className="grid gap-4 sm:grid-cols-2">
                       <Field label="Team name" hint="Reusable identity for this agent set.">
@@ -582,6 +910,64 @@ export default function TeamsPage() {
                       {agents[activeAgentIndex] && (
                         <div className="mt-5 rounded-2xl border border-border/50 bg-card/60 p-4">
                           <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Profile image" hint="Paste a public image URL or upload a local image from this laptop.">
+                              <div className="space-y-3">
+                                <div className="flex items-center gap-3">
+                                  <div className="h-14 w-14 overflow-hidden rounded-full border border-border/60 bg-background/40">
+                                    {agents[activeAgentIndex].avatar_url ? (
+                                      <img
+                                        src={resolveManagedAssetUrl(agents[activeAgentIndex].avatar_url)}
+                                        alt={agents[activeAgentIndex].display_name || "Agent avatar"}
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-muted-foreground">
+                                        {(agents[activeAgentIndex].display_name || "AG").slice(0, 2).toUpperCase()}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    <label className="inline-flex cursor-pointer items-center rounded-md border border-input bg-background px-3 py-2 text-sm">
+                                      {avatarUploadingIndex === activeAgentIndex ? (
+                                        <>
+                                          <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                                          Uploading...
+                                        </>
+                                      ) : (
+                                        "Upload local image"
+                                      )}
+                                      <input
+                                        type="file"
+                                        accept="image/png,image/jpeg,image/webp,image/gif"
+                                        className="hidden"
+                                        disabled={avatarUploadingIndex === activeAgentIndex}
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          if (file) {
+                                            void uploadAgentAvatar(activeAgentIndex, file);
+                                          }
+                                          e.currentTarget.value = "";
+                                        }}
+                                      />
+                                    </label>
+                                    {agents[activeAgentIndex].avatar_url && (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        onClick={() => updateAgent(setAgents, activeAgentIndex, "avatar_url", "")}
+                                      >
+                                        Remove image
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                                <Input
+                                  value={agents[activeAgentIndex].avatar_url || ""}
+                                  onChange={(e) => updateAgent(setAgents, activeAgentIndex, "avatar_url", e.target.value)}
+                                  placeholder="https://example.com/avatar.png"
+                                />
+                              </div>
+                            </Field>
                             <Field label="Role" hint="Short outward role, like Chief Medic or Security Lead.">
                               <Input value={agents[activeAgentIndex].role} onChange={(e) => updateAgent(setAgents, activeAgentIndex, "role", e.target.value)} placeholder="Civilian Scientist" />
                             </Field>
@@ -798,6 +1184,8 @@ export default function TeamsPage() {
                       </Button>
                     )}
                   </div>
+                  </>
+                  )}
                 </div>
               </DialogContent>
               </Dialog>
@@ -860,7 +1248,7 @@ export default function TeamsPage() {
           </div>
         </aside>
 
-        <main className="rounded-[24px] border border-border/60 glass-strong p-5">
+          <main className="min-w-0 rounded-[24px] border border-border/60 p-5 glass-strong xl:p-6">
           {!detail ? (
             <div className="flex h-full min-h-[420px] items-center justify-center rounded-[20px] border border-dashed border-border/60 bg-background/20">
               <div className="max-w-md text-center">
@@ -988,33 +1376,75 @@ export default function TeamsPage() {
                 </div>
               </div>
 
-              <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
                 <div className="rounded-[22px] border border-border/60 bg-background/30 p-5">
                   <h3 className="font-display text-xl font-semibold">Agents</h3>
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
                     {detail.agents.map((agent, index) => (
-                      <div key={agent.id} className="rounded-2xl border border-border/50 bg-card/50 p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="font-medium">{agent.display_name}</div>
-                            <div className="mt-1 text-xs uppercase tracking-[0.18em] text-primary/80">{agent.role}</div>
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onClick={() => openEditTeamAgent(index)}
+                        className="rounded-2xl border border-border/50 bg-card/50 p-4 text-left transition-colors hover:border-primary/40 hover:bg-card/70 focus:outline-none focus:ring-2 focus:ring-primary/30 xl:p-5"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border border-border/60 bg-background/40 xl:h-14 xl:w-14">
+                            {agent.avatar_url ? (
+                              <img
+                                src={resolveManagedAssetUrl(agent.avatar_url)}
+                                alt={agent.display_name}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-muted-foreground">
+                                {agent.display_name.slice(0, 2).toUpperCase()}
+                              </div>
+                            )}
                           </div>
-                          <div className="flex items-center gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => openEditTeamAgent(index)}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button variant="ghost" size="icon" onClick={() => void deleteAgent(agent.slug, agent.display_name)}>
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-base font-medium xl:text-lg">{agent.display_name}</div>
+                                <div className="mt-1 line-clamp-2 text-[11px] uppercase leading-5 tracking-[0.16em] text-primary/80">
+                                  {agent.role}
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openEditTeamAgent(index);
+                                  }}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void deleteAgent(agent.slug, agent.display_name);
+                                  }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                            <p className="mt-4 text-sm leading-7 text-muted-foreground">
+                              {truncateText(agent.core_personality, 96)}
+                            </p>
+                            <div className="mt-4 grid gap-1 text-xs text-muted-foreground">
+                              <div>Talkativeness {agent.talkativeness.toFixed(2)}</div>
+                              <div>Provider {(agent.provider_type || "openai").toUpperCase()}</div>
+                              <div>Model {agent.model_id || "Default"}</div>
+                            </div>
                           </div>
                         </div>
-                        <p className="mt-3 text-sm leading-6 text-muted-foreground">{agent.core_personality || "No personality summary yet."}</p>
-                        <div className="mt-4 space-y-1 text-xs text-muted-foreground">
-                          <div>Talkativeness {agent.talkativeness.toFixed(2)}</div>
-                          <div>Provider {(agent.provider_type || "openai").toUpperCase()}</div>
-                          <div>Model {agent.model_id || "Default"}</div>
-                        </div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </div>

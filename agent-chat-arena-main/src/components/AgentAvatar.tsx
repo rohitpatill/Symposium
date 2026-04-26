@@ -1,5 +1,7 @@
+import type React from "react";
 import type { AgentMeta } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 
 interface Props {
   meta: AgentMeta;
@@ -16,21 +18,27 @@ const sizes = {
 
 export function AgentAvatar({ meta, size = "md", ring, className }: Props) {
   return (
-    <div
+    <Avatar
       className={cn(
         "relative shrink-0 rounded-full font-display font-semibold text-white",
-        "flex items-center justify-center shadow-bubble",
+        "flex items-center justify-center shadow-bubble overflow-hidden",
         sizes[size],
         ring && "ring-2 ring-offset-2 ring-offset-background",
         className,
       )}
       style={{
         backgroundColor: meta.themeColor,
-        ...(ring ? { "--tw-ring-color": meta.ringColor } as React.CSSProperties : {})
+        ...(ring ? ({ "--tw-ring-color": meta.ringColor } as React.CSSProperties) : {}),
       }}
-      title={`${meta.name} — ${meta.role}`}
+      title={`${meta.name} - ${meta.role}`}
     >
-      <span className="drop-shadow-sm">{meta.initials}</span>
-    </div>
+      {meta.avatarUrl ? <AvatarImage src={meta.avatarUrl} alt={meta.name} className="object-cover" /> : null}
+      <AvatarFallback
+        className="font-display font-semibold text-white"
+        style={{ backgroundColor: meta.themeColor }}
+      >
+        <span className="drop-shadow-sm">{meta.initials}</span>
+      </AvatarFallback>
+    </Avatar>
   );
 }

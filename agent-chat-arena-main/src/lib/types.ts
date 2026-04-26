@@ -6,6 +6,7 @@ export interface AgentMeta {
   role: string;
   providerType?: string;
   modelId?: string;
+  avatarUrl?: string;
   initials: string;
   emoji: string;
   themeColor: string;
@@ -47,6 +48,7 @@ export interface SimulationConfig {
 
 export interface ManagedAgentDraft {
   display_name: string;
+  avatar_url?: string;
   provider_config_id?: number | null;
   provider_type?: string;
   model_id?: string;
@@ -88,6 +90,7 @@ export interface TeamAgentSummary {
   id: number;
   slug: string;
   display_name: string;
+  avatar_url?: string;
   provider_config_id?: number | null;
   provider_type?: string;
   model_id?: string;
