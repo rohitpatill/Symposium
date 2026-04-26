@@ -94,6 +94,20 @@ export interface TeamAgentSummary {
   role: string;
   core_personality: string;
   talkativeness: number;
+  speech_style?: string;
+  private_goal?: string;
+  values_text?: string;
+  handling_defeat?: string;
+  urgency_tendency?: string;
+  extra_notes?: string;
+  personal_memory?: string;
+  memories?: Array<{
+    type: string;
+    target_agent_slug?: string | null;
+    title: string;
+    content: string;
+  }>;
+  personas?: Record<string, string>;
   sort_order: number;
 }
 
@@ -110,6 +124,7 @@ export interface TeamDetailResponse {
   agents: TeamAgentSummary[];
   conversations: ConversationSummary[];
   scenarioTemplate: string;
+  groupMemories?: ManagedGroupMemoryDraft[];
 }
 
 export interface ProviderConfigSummary {

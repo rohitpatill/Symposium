@@ -171,6 +171,15 @@ export default function TeamsPage() {
       setActiveAgentIndex(0);
       await loadTeams();
       await loadProviders();
+      if (editing && detail && data.team) {
+        setDetail({
+          team: data.team.team,
+          agents: data.team.agents,
+          conversations: data.team.conversations,
+          scenarioTemplate: data.team.scenarioTemplate,
+          groupMemories: data.team.groupMemories || [],
+        });
+      }
       navigate(`/teams/${data.team.team.id}`);
     }
   }
@@ -261,7 +270,7 @@ export default function TeamsPage() {
     setConfirmOpen(true);
   }
 
-  function openEditTeam() {
+  function hydrateTeamEditor(step = 0, agentIndex = 0) {
     if (!detail) return;
     setEditing(true);
     setName(detail.team.name);
@@ -276,11 +285,32 @@ export default function TeamsPage() {
       role: agent.role || "",
       core_personality: agent.core_personality || "",
       talkativeness: agent.talkativeness ?? 0.5,
+      speech_style: agent.speech_style || "",
+      private_goal: agent.private_goal || "",
+      values_text: agent.values_text || "",
+      handling_defeat: agent.handling_defeat || "",
+      urgency_tendency: agent.urgency_tendency || "",
+      extra_notes: agent.extra_notes || "",
+      personal_memory: agent.personal_memory || "",
+      memories: agent.memories || [],
+      personas: agent.personas || {},
     })));
-    setGroupMemories([]);
-    setCreateStep(0);
-    setActiveAgentIndex(0);
+    setGroupMemories(detail.groupMemories || []);
+    setCreateStep(step);
+    setActiveAgentIndex(agentIndex);
     setOpen(true);
+  }
+
+  function openEditTeam() {
+    hydrateTeamEditor(0, 0);
+  }
+
+  function openEditTeamAgent(agentIndex: number) {
+    hydrateTeamEditor(2, agentIndex);
+  }
+
+  function openEditTeamScenario() {
+    hydrateTeamEditor(4, 0);
   }
 
   async function startConversation() {
@@ -962,16 +992,21 @@ export default function TeamsPage() {
                 <div className="rounded-[22px] border border-border/60 bg-background/30 p-5">
                   <h3 className="font-display text-xl font-semibold">Agents</h3>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    {detail.agents.map((agent) => (
+                    {detail.agents.map((agent, index) => (
                       <div key={agent.id} className="rounded-2xl border border-border/50 bg-card/50 p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="font-medium">{agent.display_name}</div>
                             <div className="mt-1 text-xs uppercase tracking-[0.18em] text-primary/80">{agent.role}</div>
                           </div>
-                          <Button variant="ghost" size="icon" onClick={() => void deleteAgent(agent.slug, agent.display_name)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="icon" onClick={() => openEditTeamAgent(index)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => void deleteAgent(agent.slug, agent.display_name)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
                         <p className="mt-3 text-sm leading-6 text-muted-foreground">{agent.core_personality || "No personality summary yet."}</p>
                         <div className="mt-4 space-y-1 text-xs text-muted-foreground">
@@ -985,7 +1020,12 @@ export default function TeamsPage() {
                 </div>
 
                 <div className="rounded-[22px] border border-border/60 bg-background/30 p-5">
-                  <h3 className="font-display text-xl font-semibold">Scenario template</h3>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="font-display text-xl font-semibold">Scenario template</h3>
+                    <Button variant="ghost" size="icon" onClick={openEditTeamScenario}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                  </div>
                   <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-muted-foreground">
                     {detail.scenarioTemplate || "No default scenario saved yet."}
                   </p>

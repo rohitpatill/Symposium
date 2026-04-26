@@ -92,6 +92,19 @@ class TeamUpdateIn(TeamCreateIn):
     pass
 
 
+class AgentQuickUpdateIn(BaseModel):
+    display_name: str = Field(min_length=1)
+    provider_config_id: int
+    model_id: str = Field(min_length=1)
+    role: str = ""
+    core_personality: str = ""
+    talkativeness: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class ScenarioTemplateUpdateIn(BaseModel):
+    scenario_template: str = ""
+
+
 class ConversationCreateIn(BaseModel):
     title: str
     participant_slugs: list[str]
@@ -427,11 +440,49 @@ def team_summary(team_id: int) -> dict:
         agents = rows_to_dicts(conn.execute(
             """
             SELECT ta.id, ta.slug, ta.display_name, ta.provider_config_id, COALESCE(lp.provider_type, 'openai') AS provider_type,
-                   ta.model_id, ta.role, ta.core_personality, ta.talkativeness, ta.sort_order
+                   ta.model_id, ta.role, ta.core_personality, ta.talkativeness, ta.speech_style,
+                   ta.private_goal, ta.values_text, ta.handling_defeat, ta.urgency_tendency, ta.extra_notes, ta.sort_order
             FROM team_agents ta
             LEFT JOIN llm_provider_configs lp ON lp.id = ta.provider_config_id
             WHERE ta.team_id = ?
             ORDER BY ta.sort_order
+            """,
+            (team_id,),
+        ).fetchall())
+        agent_id_to_slug = {agent["id"]: agent["slug"] for agent in agents}
+        memories = rows_to_dicts(conn.execute(
+            """
+            SELECT tam.team_agent_id, tam.memory_type, tam.title, tam.content, target.slug AS target_agent_slug, tam.sort_order
+            FROM team_agent_memories tam
+            LEFT JOIN team_agents target ON target.id = tam.target_agent_id
+            WHERE tam.team_agent_id IN (
+                SELECT id FROM team_agents WHERE team_id = ?
+            )
+            ORDER BY tam.team_agent_id, tam.sort_order
+            """,
+            (team_id,),
+        ).fetchall())
+        personas = rows_to_dicts(conn.execute(
+            """
+            SELECT sap.source_agent_id, target.slug AS target_agent_slug, sap.content
+            FROM team_agent_personas sap
+            JOIN team_agents source ON source.id = sap.source_agent_id
+            JOIN team_agents target ON target.id = sap.target_agent_id
+            WHERE source.team_id = ?
+            """,
+            (team_id,),
+        ).fetchall())
+        group_memories = rows_to_dicts(conn.execute(
+            "SELECT id, title, content, is_general FROM team_group_memories WHERE team_id = ? ORDER BY id",
+            (team_id,),
+        ).fetchall())
+        group_memory_members = rows_to_dicts(conn.execute(
+            """
+            SELECT tgmm.group_memory_id, ta.slug
+            FROM team_group_memory_members tgmm
+            JOIN team_agents ta ON ta.id = tgmm.team_agent_id
+            WHERE ta.team_id = ?
+            ORDER BY tgmm.group_memory_id, ta.sort_order
             """,
             (team_id,),
         ).fetchall())
@@ -443,11 +494,43 @@ def team_summary(team_id: int) -> dict:
             "SELECT scenario_prompt FROM conversations WHERE team_id = ? AND status = 'template' ORDER BY id DESC LIMIT 1",
             (team_id,),
         ).fetchone()
+    memory_map: dict[int, list[dict]] = {}
+    personal_memory_map: dict[int, str] = {}
+    for memory in memories:
+        if memory["memory_type"] == "personal":
+            personal_memory_map[memory["team_agent_id"]] = memory["content"]
+        else:
+            memory_map.setdefault(memory["team_agent_id"], []).append({
+                "type": memory["memory_type"],
+                "target_agent_slug": memory["target_agent_slug"],
+                "title": memory["title"],
+                "content": memory["content"],
+            })
+    persona_map: dict[int, dict[str, str]] = {}
+    for persona in personas:
+        persona_map.setdefault(persona["source_agent_id"], {})[persona["target_agent_slug"]] = persona["content"]
+    group_member_map: dict[int, list[str]] = {}
+    for member in group_memory_members:
+        group_member_map.setdefault(member["group_memory_id"], []).append(member["slug"])
+    for agent in agents:
+        agent["personal_memory"] = personal_memory_map.get(agent["id"], "")
+        agent["memories"] = memory_map.get(agent["id"], [])
+        agent["personas"] = persona_map.get(agent["id"], {})
+    normalized_group_memories = [
+        {
+            "title": memory["title"],
+            "content": memory["content"],
+            "participant_slugs": group_member_map.get(memory["id"], []),
+            "is_general": bool(memory["is_general"]),
+        }
+        for memory in group_memories
+    ]
     return {
         "team": team,
         "agents": agents,
         "conversations": conversations,
         "scenarioTemplate": scenario["scenario_prompt"] if scenario else "",
+        "groupMemories": normalized_group_memories,
     }
 
 
@@ -785,6 +868,87 @@ async def update_team(team_id: int, payload: TeamUpdateIn):
         )
     write_team(team_id, payload)
     return {"status": "ok", "team": team_summary(team_id)}
+
+
+@app.patch("/api/managed/teams/{team_id}/agents/{agent_slug}")
+async def quick_update_team_agent(team_id: int, agent_slug: str, payload: AgentQuickUpdateIn):
+    next_slug = slugify(payload.display_name)
+    with get_conn() as conn:
+        if validated_provider_count(conn) < 1:
+            raise HTTPException(status_code=400, detail="Validate at least one provider before saving a team.")
+        provider = conn.execute(
+            "SELECT id FROM llm_provider_configs WHERE id = ? AND is_valid = 1",
+            (payload.provider_config_id,),
+        ).fetchone()
+        if not provider:
+            raise HTTPException(status_code=400, detail="Choose a validated provider for this agent.")
+        if not payload.model_id.strip():
+            raise HTTPException(status_code=400, detail="Choose a model for this agent.")
+        team = conn.execute("SELECT id FROM teams WHERE id = ?", (team_id,)).fetchone()
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        agent = conn.execute(
+            "SELECT id FROM team_agents WHERE team_id = ? AND slug = ?",
+            (team_id, agent_slug),
+        ).fetchone()
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        duplicate = conn.execute(
+            "SELECT id FROM team_agents WHERE team_id = ? AND slug = ? AND id != ?",
+            (team_id, next_slug, agent["id"]),
+        ).fetchone()
+        if duplicate:
+            raise HTTPException(status_code=400, detail="Another agent already uses that name.")
+        conn.execute(
+            """
+            UPDATE team_agents
+            SET slug = ?, display_name = ?, provider_config_id = ?, model_id = ?, role = ?,
+                core_personality = ?, talkativeness = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                next_slug,
+                payload.display_name.strip(),
+                payload.provider_config_id,
+                payload.model_id.strip(),
+                payload.role.strip(),
+                payload.core_personality.strip(),
+                payload.talkativeness,
+                agent["id"],
+            ),
+        )
+        conn.execute("UPDATE teams SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (team_id,))
+    return {"status": "ok", **team_summary(team_id)}
+
+
+@app.patch("/api/managed/teams/{team_id}/scenario-template")
+async def update_scenario_template(team_id: int, payload: ScenarioTemplateUpdateIn):
+    with get_conn() as conn:
+        team = conn.execute("SELECT id FROM teams WHERE id = ?", (team_id,)).fetchone()
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        existing = conn.execute(
+            "SELECT id FROM conversations WHERE team_id = ? AND status = 'template' ORDER BY id DESC LIMIT 1",
+            (team_id,),
+        ).fetchone()
+        if payload.scenario_template.strip():
+            if existing:
+                conn.execute(
+                    "UPDATE conversations SET scenario_prompt = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (payload.scenario_template.strip(), existing["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO conversations (team_id, title, mode, status, scenario_prompt, state_json)
+                    VALUES (?, 'Scenario Template', 'managed', 'template', ?, '{}')
+                    """,
+                    (team_id, payload.scenario_template.strip()),
+                )
+        else:
+            conn.execute("DELETE FROM conversations WHERE team_id = ? AND status = 'template'", (team_id,))
+        conn.execute("UPDATE teams SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (team_id,))
+    return {"status": "ok", **team_summary(team_id)}
 
 
 @app.delete("/api/managed/teams/{team_id}")
