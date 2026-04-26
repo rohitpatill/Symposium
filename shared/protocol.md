@@ -27,7 +27,7 @@ HOLD means you read what was said and you have nothing worth saying right now. I
 ```
 
 - `urgency`: a float from 0 to 10, up to 2 decimal places. How strongly you want to speak right now.
-- `inner_thought`: 1–2 lines of your **private internal monologue** for this turn. NOT a pitch. NOT a speech. NOT what you'd say to the group. Frame it from your own perspective: "I think...", "I'm worried...", "They're missing...", "I should...".
+- `inner_thought`: keep it concise — preferably 1–2 lines, maximum 3 short lines. This is your **private internal monologue** for this turn. NOT a pitch. NOT a speech. NOT what you'd say to the group. Frame it from your own perspective: "I think...", "I'm worried...", "They're missing...", "I should...".
 
 Only one agent speaks per turn. The highest urgency wins the floor.
 
@@ -66,6 +66,7 @@ Respond with:
 ```
 
 The spoken message should be consistent with your inner thought, but it's the **outward** version — what others actually hear. It can be more diplomatic, more aggressive, sarcastic, partial, etc., depending on your character.
+Keep the spoken message concise. Prefer 1–3 sentences. Avoid long paragraphs unless the moment genuinely requires it.
 
 ---
 
