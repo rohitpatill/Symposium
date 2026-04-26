@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import requests
 
 from .base import BaseProvider, ProviderError
@@ -13,6 +14,39 @@ class GeminiProvider(BaseProvider):
 
     def _url(self, model: str) -> str:
         return f"{GEMINI_BASE_URL}/{model}:generateContent"
+
+    def _normalize_model(self, model: str) -> str:
+        if model == "gemini-2.5-flash-lite-preview-09-2025":
+            return "gemini-2.5-flash-lite"
+        return model
+
+    def _request(self, api_key: str, model: str, payload: dict) -> dict:
+        response = requests.post(
+            self._url(model),
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=120,
+        )
+        if response.status_code >= 400:
+            raise ProviderError(f"Gemini request failed: {response.text[:500]}")
+        return response.json()
+
+    def _extract_text(self, data: dict) -> str:
+        return "".join(
+            part.get("text", "")
+            for candidate in data.get("candidates", [])
+            for part in candidate.get("content", {}).get("parts", [])
+            if part.get("text")
+        ).strip()
+
+    def _looks_like_complete_json(self, text: str) -> bool:
+        if not text:
+            return False
+        try:
+            json.loads(text.removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            return True
+        except json.JSONDecodeError:
+            return False
 
     def validate_api_key(self, api_key: str) -> dict:
         payload = {
@@ -40,6 +74,7 @@ class GeminiProvider(BaseProvider):
         cache_key: str | None = None,
         cache_options: dict | None = None,
     ) -> dict:
+        model_name = self._normalize_model(model)
         contents = []
         for message in messages:
             role = "model" if message["role"] == "assistant" else "user"
@@ -52,18 +87,20 @@ class GeminiProvider(BaseProvider):
                 "maxOutputTokens": max_tokens,
             },
         }
-        response = requests.post(
-            self._url(model),
-            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-            json=payload,
-            timeout=60,
-        )
-        if response.status_code >= 400:
-            raise ProviderError(f"Gemini request failed: {response.text[:500]}")
-        data = response.json()
-        try:
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as exc:
-            raise ProviderError(f"Gemini response parsing failed: {exc}") from exc
+        data = self._request(api_key, model_name, payload)
+        text = self._extract_text(data)
+        finish_reason = (data.get("candidates") or [{}])[0].get("finishReason")
+        if finish_reason == "MAX_TOKENS" and not self._looks_like_complete_json(text):
+            retry_payload = {
+                **payload,
+                "generationConfig": {
+                    **payload["generationConfig"],
+                    "maxOutputTokens": max(max_tokens, 256),
+                },
+            }
+            data = self._request(api_key, model_name, retry_payload)
+            text = self._extract_text(data)
+        if not text:
+            raise ProviderError("Gemini response parsing failed: no text parts returned")
         usage = data.get("usageMetadata", {})
         return {"text": text, "usage": usage, "raw": data}

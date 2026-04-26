@@ -39,6 +39,7 @@ class OpenAIProvider(BaseProvider):
         cache_key: str | None = None,
         cache_options: dict | None = None,
     ) -> dict:
+        effective_max_tokens = self._effective_max_tokens(model, max_tokens)
         input_items = [
             {"role": "user", "content": [{"type": "input_text", "text": system_prompt}]}
         ]
@@ -50,18 +51,50 @@ class OpenAIProvider(BaseProvider):
         payload = {
             "model": model,
             "input": input_items,
-            "max_output_tokens": max_tokens,
+            "max_output_tokens": effective_max_tokens,
             "text": {"format": {"type": "json_object"}},
         }
+        if model.startswith("gpt-5"):
+            payload["reasoning"] = {"effort": self._reasoning_effort(model)}
+            payload["text"]["verbosity"] = "low"
         if cache_key:
             payload["prompt_cache_key"] = cache_key
-            payload["prompt_cache_retention"] = (cache_options or {}).get("retention", "in_memory")
-        response = requests.post(config.API_URL, json=payload, headers=self._headers(api_key), timeout=60)
+        response = requests.post(config.API_URL, json=payload, headers=self._headers(api_key), timeout=120)
         if response.status_code >= 400:
             raise ProviderError(f"OpenAI request failed: {response.text[:500]}")
         data = response.json()
         try:
-            text = data["output"][0]["content"][0]["text"]
+            text = self._extract_text(data)
         except Exception as exc:
             raise ProviderError(f"OpenAI response parsing failed: {exc}") from exc
         return {"text": text, "usage": data.get("usage", {}), "raw": data}
+
+    def _extract_text(self, data: dict) -> str:
+        if data.get("output_text"):
+            return data["output_text"]
+        for output_item in data.get("output", []):
+            for content_item in output_item.get("content", []):
+                if content_item.get("text"):
+                    return content_item["text"]
+        incomplete = data.get("incomplete_details") or {}
+        if incomplete.get("reason") == "max_output_tokens":
+            raise ProviderError("response used its token budget before producing final text; try a larger output budget or lower reasoning effort")
+        raise KeyError("content")
+
+    def _reasoning_effort(self, model: str) -> str:
+        if model in {"gpt-5", "gpt-5-mini", "gpt-5-nano"}:
+            return "minimal"
+        if model == "gpt-5-pro":
+            return "high"
+        if model.endswith("-pro"):
+            return "medium"
+        return "none"
+
+    def _effective_max_tokens(self, model: str, max_tokens: int) -> int:
+        if model == "gpt-5-pro":
+            return max(max_tokens, 768)
+        if model.endswith("-pro"):
+            return max(max_tokens, 512)
+        if model.startswith("gpt-5"):
+            return max(max_tokens, 256)
+        return max_tokens

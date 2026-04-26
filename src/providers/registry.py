@@ -35,7 +35,6 @@ GEMINI_MODELS = [
     {"model_id": "gemini-2.5-flash-lite", "name": "Gemini 2.5 Flash Lite", "input": 0.10, "output": 0.40},
     {"model_id": "gemini-2.5-flash-lite-preview-09-2025", "name": "Gemini 2.5 Flash Lite Preview 09-2025", "input": 0.10, "output": 0.40},
     {"model_id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "input": 0.10, "output": 0.40},
-    {"model_id": "gemini-2.0-flash-lite", "name": "Gemini 2.0 Flash Lite", "input": 0.075, "output": 0.30},
 ]
 
 ANTHROPIC_MODELS = [
@@ -47,11 +46,7 @@ ANTHROPIC_MODELS = [
     {"model_id": "claude-sonnet-4.6", "name": "Claude Sonnet 4.6", "input": 3.00, "output": 15.00},
     {"model_id": "claude-sonnet-4.5", "name": "Claude Sonnet 4.5", "input": 3.00, "output": 15.00},
     {"model_id": "claude-sonnet-4", "name": "Claude Sonnet 4", "input": 3.00, "output": 15.00},
-    {"model_id": "claude-sonnet-3.7", "name": "Claude Sonnet 3.7", "input": 3.00, "output": 15.00},
     {"model_id": "claude-haiku-4.5", "name": "Claude Haiku 4.5", "input": 1.00, "output": 5.00},
-    {"model_id": "claude-haiku-3.5", "name": "Claude Haiku 3.5", "input": 0.80, "output": 4.00},
-    {"model_id": "claude-opus-3", "name": "Claude Opus 3", "input": 15.00, "output": 75.00},
-    {"model_id": "claude-haiku-3", "name": "Claude Haiku 3", "input": 0.25, "output": 1.25},
 ]
 
 PROVIDER_CATALOG = {

@@ -125,6 +125,10 @@ export default function TeamsPage() {
   );
   const validatedProviders = useMemo(() => providers.filter((provider) => provider.is_valid), [providers]);
   const hasValidatedProvider = validatedProviders.length > 0;
+  const allAgentsHaveModelSetup = useMemo(
+    () => agents.every((agent) => agent.provider_config_id && agent.model_id.trim()),
+    [agents],
+  );
 
   async function createTeam() {
     if (!hasValidatedProvider) {
@@ -572,7 +576,7 @@ export default function TeamsPage() {
                                   );
                                 }}
                               >
-                                <option value="">Use app default</option>
+                                <option value="">Choose provider</option>
                                 {providers.filter((provider) => provider.is_valid).map((provider) => (
                                   <option key={provider.id} value={provider.id}>
                                     {provider.display_name} ({provider.provider_type})
@@ -752,13 +756,14 @@ export default function TeamsPage() {
                         }}
                         disabled={
                           (createStep === 0 && !name.trim()) ||
-                          (createStep === 1 && (agents.length < 2 || new Set(agentSlugs).size !== agentSlugs.length || agents.some((agent) => !agent.display_name.trim())))
+                          (createStep === 1 && (agents.length < 2 || new Set(agentSlugs).size !== agentSlugs.length || agents.some((agent) => !agent.display_name.trim()))) ||
+                          (createStep === 2 && !allAgentsHaveModelSetup)
                         }
                       >
                         Next
                       </Button>
                     ) : (
-                      <Button onClick={createTeam} disabled={!name.trim() || agents.length < 2 || new Set(agentSlugs).size !== agentSlugs.length}>
+                      <Button onClick={createTeam} disabled={!name.trim() || agents.length < 2 || new Set(agentSlugs).size !== agentSlugs.length || !allAgentsHaveModelSetup}>
                         {editing ? "Save team" : "Create team"}
                       </Button>
                     )}

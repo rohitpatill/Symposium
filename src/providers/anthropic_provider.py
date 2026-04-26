@@ -69,6 +69,8 @@ class AnthropicProvider(BaseProvider):
 
     def _normalize_model_name(self, model: str) -> str:
         direct_map = {
+            "claude-opus-4": "claude-opus-4-0",
+            "claude-sonnet-4": "claude-sonnet-4-0",
             "claude-sonnet-3.7": "claude-3-7-sonnet-latest",
             "claude-haiku-3.5": "claude-3-5-haiku-latest",
             "claude-opus-3": "claude-3-opus-latest",

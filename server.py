@@ -148,6 +148,20 @@ def validated_provider_count(conn) -> int:
     return int(row["count"]) if row else 0
 
 
+def validate_agent_provider_assignments(conn, agents: list[AgentIn]) -> None:
+    valid_provider_ids = {
+        row["id"]
+        for row in conn.execute("SELECT id FROM llm_provider_configs WHERE is_valid = 1").fetchall()
+    }
+    for agent in agents:
+        if not agent.provider_config_id:
+            raise HTTPException(status_code=400, detail=f"Select a provider for {agent.display_name}.")
+        if agent.provider_config_id not in valid_provider_ids:
+            raise HTTPException(status_code=400, detail=f"{agent.display_name} is using an invalid or missing provider configuration.")
+        if not agent.model_id.strip():
+            raise HTTPException(status_code=400, detail=f"Select a model for {agent.display_name}.")
+
+
 def provider_type_for_agent(conn, provider_config_id: int | None) -> str:
     if not provider_config_id:
         return config.DEFAULT_PROVIDER
@@ -741,6 +755,7 @@ async def create_team(payload: TeamCreateIn):
     with get_conn() as conn:
         if validated_provider_count(conn) < 1:
             raise HTTPException(status_code=400, detail="Validate at least one provider before creating a team.")
+        validate_agent_provider_assignments(conn, payload.agents)
         cursor = conn.execute(
             "INSERT INTO teams (name, description) VALUES (?, ?)",
             (payload.name.strip(), payload.description.strip()),
@@ -760,6 +775,7 @@ async def update_team(team_id: int, payload: TeamUpdateIn):
     with get_conn() as conn:
         if validated_provider_count(conn) < 1:
             raise HTTPException(status_code=400, detail="Validate at least one provider before saving a team.")
+        validate_agent_provider_assignments(conn, payload.agents)
         exists = conn.execute("SELECT id FROM teams WHERE id = ?", (team_id,)).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Team not found")
