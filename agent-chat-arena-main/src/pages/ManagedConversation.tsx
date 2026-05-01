@@ -8,7 +8,7 @@ import { UnderTheHoodPanel } from "@/components/UnderTheHoodPanel";
 import { useManagedConversation } from "@/hooks/useManagedConversation";
 
 export default function ManagedConversationPage() {
-  const { conversationId } = useParams();
+  const { teamId, conversationId } = useParams();
   const sim = useManagedConversation(conversationId);
   const [panelOpen, setPanelOpen] = useState(true);
 
@@ -23,9 +23,9 @@ export default function ManagedConversationPage() {
   return (
     <div className="h-screen w-full overflow-hidden">
       <div className="border-b border-border/60 px-4 py-2 text-xs text-muted-foreground glass-strong">
-        <Link to="/teams" className="inline-flex items-center gap-2 hover:text-foreground">
+        <Link to={`/teams/${sim.conversation?.team_id}`} className="inline-flex items-center gap-2 hover:text-foreground">
           <ArrowLeft className="h-3.5 w-3.5" />
-          Back to teams
+          Back to team
         </Link>
       </div>
       <div className="h-[calc(100vh-41px)] flex flex-col overflow-hidden">

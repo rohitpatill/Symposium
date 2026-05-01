@@ -1490,7 +1490,7 @@ async def get_conversation(conversation_id: int):
         })
     return {
         "status": "ok",
-        "conversation": {**convo, "settings": loads(convo.get("settings_json"), {})},
+        "conversation": {**convo, "settings": loads(convo.get("settings_json"), {}), "team_id": convo.get("team_id")},
         "participants": participants,
         "messages": messages,
         "turns": formatted_turns,
