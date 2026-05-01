@@ -271,7 +271,7 @@ export function TeamDetailView(props: TeamDetailViewProps) {
             <h3 className="font-display text-xl font-semibold">Conversation history</h3>
             <div className="mt-4 space-y-3">
               {detail.conversations.filter((conversation) => conversation.status !== "template").map((conversation) => (
-                <Link key={conversation.id} to={`/conversations/${conversation.id}`} className="flex items-center justify-between rounded-2xl border border-border/50 bg-card/40 px-4 py-3 hover:border-primary/40">
+                <Link key={conversation.id} to={`/teams/${detail.team.id}/conversations/${conversation.id}`} className="flex items-center justify-between rounded-2xl border border-border/50 bg-card/40 px-4 py-3 hover:border-primary/40">
                   <div>
                     <div className="font-medium">{conversation.title}</div>
                     <div className="text-xs text-muted-foreground">{conversation.status}</div>
