@@ -1378,17 +1378,20 @@ export default function TeamsPage() {
 
               <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
                 <div className="rounded-[22px] border border-border/60 bg-background/30 p-5">
-                  <h3 className="font-display text-xl font-semibold">Agents</h3>
-                  <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="font-display text-xl font-semibold">Agents</h3>
+                    <div className="text-xs text-muted-foreground">Click a card to open the full editor</div>
+                  </div>
+                  <div className="mt-4 max-h-[560px] space-y-3 overflow-y-auto pr-1">
                     {detail.agents.map((agent, index) => (
                       <button
                         key={agent.id}
                         type="button"
                         onClick={() => openEditTeamAgent(index)}
-                        className="rounded-2xl border border-border/50 bg-card/50 p-4 text-left transition-colors hover:border-primary/40 hover:bg-card/70 focus:outline-none focus:ring-2 focus:ring-primary/30 xl:p-5"
+                        className="w-full rounded-2xl border border-border/50 bg-card/50 p-4 text-left transition-colors hover:border-primary/40 hover:bg-card/70 focus:outline-none focus:ring-2 focus:ring-primary/30"
                       >
-                        <div className="flex items-start gap-3">
-                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border border-border/60 bg-background/40 xl:h-14 xl:w-14">
+                        <div className="flex items-start gap-4">
+                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border border-border/60 bg-background/40 sm:h-14 sm:w-14">
                             {agent.avatar_url ? (
                               <img
                                 src={resolveManagedAssetUrl(agent.avatar_url)}
@@ -1403,17 +1406,25 @@ export default function TeamsPage() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="truncate text-base font-medium xl:text-lg">{agent.display_name}</div>
-                                <div className="mt-1 line-clamp-2 text-[11px] uppercase leading-5 tracking-[0.16em] text-primary/80">
-                                  {agent.role}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="truncate text-base font-medium sm:text-lg">{agent.display_name}</div>
+                                    <div className="mt-1 text-[11px] uppercase leading-5 tracking-[0.14em] text-primary/80 sm:text-xs">
+                                      {agent.role}
+                                    </div>
+                                  </div>
+                                  <div className="hidden shrink-0 text-right text-[11px] leading-5 text-muted-foreground sm:block">
+                                    <div>Talkativeness {agent.talkativeness.toFixed(2)}</div>
+                                    <div>{(agent.provider_type || "openai").toUpperCase()}</div>
+                                  </div>
                                 </div>
                               </div>
                               <div className="flex shrink-0 items-center gap-1">
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-8 w-8"
+                                  className="h-7 w-7 rounded-full"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     openEditTeamAgent(index);
@@ -1424,7 +1435,7 @@ export default function TeamsPage() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-8 w-8"
+                                  className="h-7 w-7 rounded-full"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     void deleteAgent(agent.slug, agent.display_name);
@@ -1434,13 +1445,18 @@ export default function TeamsPage() {
                                 </Button>
                               </div>
                             </div>
-                            <p className="mt-4 text-sm leading-7 text-muted-foreground">
+                            <p className="mt-3 text-sm leading-7 text-muted-foreground">
                               {truncateText(agent.core_personality, 96)}
                             </p>
-                            <div className="mt-4 grid gap-1 text-xs text-muted-foreground">
-                              <div>Talkativeness {agent.talkativeness.toFixed(2)}</div>
-                              <div>Provider {(agent.provider_type || "openai").toUpperCase()}</div>
-                              <div>Model {agent.model_id || "Default"}</div>
+                            <div className="mt-3 grid gap-1 text-xs text-muted-foreground sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                              <div className="min-w-0">
+                                <div className="sm:hidden">Talkativeness {agent.talkativeness.toFixed(2)}</div>
+                                <div className="sm:hidden">Provider {(agent.provider_type || "openai").toUpperCase()}</div>
+                                <div className="truncate">Model {agent.model_id || "Default"}</div>
+                              </div>
+                              <div className="hidden text-right sm:block">
+                                <div className="truncate">Model {agent.model_id || "Default"}</div>
+                              </div>
                             </div>
                           </div>
                         </div>
