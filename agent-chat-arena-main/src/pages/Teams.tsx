@@ -277,10 +277,10 @@ export default function TeamsPage() {
       setConfirmOpen(true);
       return;
     }
-    setBuilderMessages((prev) => [...prev, { role: "assistant", content: data.message }]);
-    setBuilderReady(Boolean(data.ready));
-    setBuilderMissing(data.missing || []);
-    setBuilderSummary(data.summary || null);
+    setBuilderMessages((prev) => [...prev, { role: "assistant", content: data.assistant_message }]);
+    setBuilderReady(Boolean(data.ready_to_build));
+    setBuilderMissing(Array.isArray(data.missing_information) ? data.missing_information : []);
+    setBuilderSummary(data.captured_summary || null);
   }
 
   async function startBuilderInterview() {
@@ -567,62 +567,67 @@ export default function TeamsPage() {
             )}
 
             {showCreateModeChoice && (
-              <section className="grid gap-4 md:grid-cols-2">
-                <button
-                  type="button"
-                  className="rounded-2xl border border-border/60 bg-background/30 p-5 text-left transition-colors hover:border-primary/40"
-                  onClick={() => setCreateMode("manual")}
-                >
-                  <div className="font-display text-xl font-semibold">Add manually</div>
-                  <p className="mt-3 text-sm leading-7 text-muted-foreground">Walk through the full Symposium setup wizard yourself and control every field directly.</p>
-                </button>
-                <div className="rounded-2xl border border-border/60 bg-background/30 p-5">
-                  <div className="font-display text-xl font-semibold">Add using Symposium AI</div>
-                  <p className="mt-3 text-sm leading-7 text-muted-foreground">Let the builder ask focused questions, shape the cast, and generate the managed payload for you.</p>
-                  <div className="mt-5 space-y-4">
-                    <Field label="Builder provider" hint="This is the provider Symposium AI uses while interviewing and generating the team.">
-                      <select
-                        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                        value={String(builderProviderConfigId ?? "")}
-                        onChange={(e) => {
-                          const providerId = e.target.value ? Number(e.target.value) : null;
-                          const provider = validatedProviders.find((item) => item.id === providerId);
-                          setBuilderProviderConfigId(providerId);
-                          setBuilderProviderType(provider?.provider_type || "openai");
-                          setBuilderModelId(providerCatalog[provider?.provider_type || "openai"]?.models?.[0]?.model_id || "");
-                        }}
-                      >
-                        {validatedProviders.map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {provider.display_name} ({provider.provider_type})
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="Builder model" hint="Pick the model that should conduct the interview and generate the final team JSON.">
-                      <select className="h-10 rounded-md border border-input bg-background px-3 text-sm" value={builderModelId} onChange={(e) => setBuilderModelId(e.target.value)}>
-                        {builderModelOptions.map((model) => (
-                          <option key={model.model_id} value={model.model_id}>
-                            {model.name}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <div className="flex justify-end">
-                      <Button
-                        onClick={async () => {
-                          setCreateMode("ai");
-                          setBuilderMessages([]);
-                          setBuilderReady(false);
-                          setBuilderMissing([]);
-                          setBuilderSummary(null);
-                          await startBuilderInterview();
-                        }}
-                        disabled={!builderProviderConfigId || !builderModelId}
-                      >
-                        Start with Symposium AI
-                      </Button>
+              <section className="grid gap-4 md:grid-cols-2 md:auto-rows-fr">
+                <div className="rounded-2xl border border-border/60 bg-background/30 p-5 flex flex-col justify-between">
+                  <div>
+                    <div className="font-display text-xl font-semibold">Add manually</div>
+                    <p className="mt-3 text-sm leading-7 text-muted-foreground">Walk through the full Symposium setup wizard yourself and control every field directly.</p>
+                  </div>
+                  <div className="mt-5 flex justify-end">
+                    <Button onClick={() => setCreateMode("manual")}>
+                      Build manually
+                    </Button>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-background/30 p-5 flex flex-col justify-between">
+                  <div>
+                    <div className="font-display text-xl font-semibold">Add using Symposium AI</div>
+                    <p className="mt-3 text-sm leading-7 text-muted-foreground">Let the builder ask focused questions, shape the cast, and generate the managed payload for you.</p>
+                    <div className="mt-5 space-y-4">
+                      <Field label="Builder provider" hint="This is the provider Symposium AI uses while interviewing and generating the team.">
+                        <select
+                          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                          value={String(builderProviderConfigId ?? "")}
+                          onChange={(e) => {
+                            const providerId = e.target.value ? Number(e.target.value) : null;
+                            const provider = validatedProviders.find((item) => item.id === providerId);
+                            setBuilderProviderConfigId(providerId);
+                            setBuilderProviderType(provider?.provider_type || "openai");
+                            setBuilderModelId(providerCatalog[provider?.provider_type || "openai"]?.models?.[0]?.model_id || "");
+                          }}
+                        >
+                          {validatedProviders.map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.display_name} ({provider.provider_type})
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Builder model" hint="Pick the model that should conduct the interview and generate the final team JSON.">
+                        <select className="h-10 rounded-md border border-input bg-background px-3 text-sm" value={builderModelId} onChange={(e) => setBuilderModelId(e.target.value)}>
+                          {builderModelOptions.map((model) => (
+                            <option key={model.model_id} value={model.model_id}>
+                              {model.name}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
                     </div>
+                  </div>
+                  <div className="mt-5 flex justify-end">
+                    <Button
+                      onClick={async () => {
+                        setCreateMode("ai");
+                        setBuilderMessages([]);
+                        setBuilderReady(false);
+                        setBuilderMissing([]);
+                        setBuilderSummary(null);
+                        await startBuilderInterview();
+                      }}
+                      disabled={!builderProviderConfigId || !builderModelId}
+                    >
+                      Start with Symposium AI
+                    </Button>
                   </div>
                 </div>
               </section>
@@ -638,7 +643,7 @@ export default function TeamsPage() {
                     Back
                   </Button>
                 </div>
-                <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                <div className="rounded-2xl border border-border/60 bg-background/30 p-4 max-h-80 overflow-y-auto">
                   <div className="space-y-3">
                     {builderMessages.map((message, index) => (
                       <div
@@ -1021,7 +1026,16 @@ export default function TeamsPage() {
                 )}
 
                 <div className="flex justify-between">
-                  <Button variant="secondary" onClick={() => setCreateStep((step) => Math.max(0, step - 1))} disabled={createStep === 0}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      if (createStep === 0) {
+                        setCreateMode(null);
+                      } else {
+                        setCreateStep((step) => Math.max(0, step - 1));
+                      }
+                    }}
+                  >
                     Back
                   </Button>
                   {createStep < 4 ? (

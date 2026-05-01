@@ -1,104 +1,24 @@
-# Project Context — Backend Architecture & File Guide
+# Backend Context — Orchestration Engine & Managed Mode
 
-This document is the **single source of truth** for the backend (Python orchestration engine).
-For the frontend (React + Vite UI), see `agent-chat-arena-main/FRONTEND_CONTEXT.md`.
+This document is the **single source of truth** for the Python backend that powers both the classic simulation CLI and the Managed Mode team builder. For the frontend (React + Vite UI), see `agent-chat-arena-main/FRONTEND_CONTEXT.md`.
 
-Use this as a blueprint when:
-- Adding a new agent or scenario
-- Modifying orchestration logic
-- Debugging why a turn behaves unexpectedly
-- Onboarding any agent (human or AI) onto the codebase
-
----
-
-## Table of Contents
-
-1. [System Overview](#system-overview)
-2. [Two-Phase Floor Protocol](#two-phase-floor-protocol)
-3. [Project Layout](#project-layout)
-4. [Root-Level Files](#root-level-files)
-5. [Source Code (`src/`)](#source-code-src)
-6. [Agents (`agents/`)](#agents-agents)
-7. [Shared Context (`shared/`)](#shared-context-shared)
-8. [Outputs (`runs/`, `logs/`)](#outputs-runs-logs)
-9. [How to Add a New Agent](#how-to-add-a-new-agent)
-10. [How to Add a New Scenario](#how-to-add-a-new-scenario)
-11. [Modification Reference Map](#modification-reference-map)
+Use this when:
+- Adding new agents or scenarios
+- Modifying orchestration logic or floor selection
+- Debugging turn behavior
+- Integrating new LLM providers
+- Building or extending Managed Mode features (teams, conversations, team builder AI)
 
 ---
 
-## System Overview
+## Quick Reference
 
-This is a **multi-agent group conversation simulator**. N agents (≥ 2) take turns in a single
-shared conversation, each with their own personality, private memories, and asymmetric view of
-the others. The system simulates realistic group dynamics: not everyone speaks every turn,
-agents can hold back, and a "floor protocol" decides who actually gets to talk.
+| Mode | Entry | Use Case |
+|------|-------|----------|
+| **CLI** | `python main.py` | Run full conversation, write outputs to `runs/<timestamp>/` |
+| **Server** | `python server.py` | FastAPI backend for React UI; turn-by-turn over HTTP |
 
-The system is **scenario-agnostic** — the orchestration engine works for any agent count and
-any topic. Scenarios are defined entirely by data files (markdown).
-
-There are two ways to run a conversation:
-
-| Mode | Entry point | Use case |
-|------|------------|----------|
-| **CLI** | `python main.py` | Run a full conversation start to finish, files written at end |
-| **Server** | `python server.py` (FastAPI on port 8000) | Backend for the React UI; turn-by-turn over HTTP |
-
-Both share the same `Orchestrator` class. Outputs are written to `runs/<timestamp>/` after **every turn** in both modes.
-
----
-
-## Two-Phase Floor Protocol
-
-Every turn runs **Phase 1 (parallel)** followed by **Phase 2 (single-speaker)**:
-
-### Phase 1 — Decision (parallel)
-
-All agents are called concurrently with `asyncio.gather`. Each one returns:
-
-```json
-{"decision": "HOLD", "inner_thought": "<private inner monologue>"}
-```
-or
-```json
-{"decision": "SPEAK", "urgency": 7.43, "inner_thought": "<private inner monologue>"}
-```
-
-- `inner_thought` is **private introspection**, never shown to other agents. It is what the
-  agent is thinking to itself ("I think...", "I'm worried...", "They don't realize..."), NOT
-  what they would say out loud.
-- `urgency` is a precise float (e.g. 7.43, not 7.5). The prompt explicitly forbids round numbers.
-
-### Floor selection (no LLM involved)
-
-Pure Python logic in `orchestrator.py`:
-
-1. Filter agents with `decision == "SPEAK"`.
-2. Apply **consecutive-speaker penalty** to each speaker's raw urgency:
-   - 0 prior consecutive wins → multiplier 1.00 (no penalty)
-   - 1 prior win → 0.85
-   - 2 prior wins → 0.65
-   - 3+ prior wins → 0.40 (heavy penalty)
-3. Pick the agent with the **highest effective urgency**. On exact ties, random.
-4. Losers' inner thoughts are **not** broadcast — they live only in each agent's private
-   `thought_history`.
-
-### Phase 2 — Spoken message (winner only)
-
-The winner is called a second time with their `inner_thought` injected. They produce:
-
-```json
-{"response": "<the actual outward message they say to the group>"}
-```
-
-The spoken message can differ in tone/wording from the inner thought — the inner thought is
-private, the response is public.
-
-### Termination
-
-A run ends when **any** of these is true:
-- `MAX_TURNS` reached (default 20)
-- `ALL_HOLD_TERMINATION` consecutive turns of all-HOLD (default 2)
+Both share the same `Orchestrator` class. Managed Mode endpoints use SQLite (`arena.db`) for persistence.
 
 ---
 
@@ -106,44 +26,46 @@ A run ends when **any** of these is true:
 
 ```
 Agent Teams Updated/
-├── main.py                       # CLI entry point
-├── server.py                     # FastAPI server (frontend backend)
-├── config.py                     # All knobs and constants
-├── requirements.txt
-├── .env                          # API key (Bearer token, gitignored)
-├── .claude/
-│   └── settings.json             # Project-scope Claude permissions
-│
+├── main.py                       # CLI entry point (classic mode)
+├── server.py                     # FastAPI server (Managed Mode + classic API)
+├── config.py                     # All tunable constants
+├── db.py                         # SQLite schema + query helpers
 ├── CONTEXT.md                    # ← this file (backend guide)
-├── CLAUDE.md                     # Quick-reference summary
-├── PROJECT_STRUCTURE.md          # Historical layout doc
-├── SYSTEM_CONTEXT.md             # Historical design doc
-├── RUN2_CONTEXT.md, RUN4_CONTEXT.md, RUN5_SPEC.md   # Iteration notes
+├── CLAUDE.md                     # Quick reference
+├── requirements.txt
+├── .env                          # API keys (gitignored)
 │
 ├── src/
-│   ├── agent.py                  # Agent class (one per participant)
+│   ├── agent.py                  # Agent class (personality, messages, API calls)
 │   ├── orchestrator.py           # Turn loop, floor selection, penalty
-│   ├── context_builder.py        # Phase 1 prompt + transcript formatting
+│   ├── context_builder.py        # Phase 1 prompt construction
 │   ├── logger.py                 # Per-run output files
 │   ├── flow_logger.py            # Real-time structured trace
+│   ├── providers/
+│   │   ├── base.py               # Provider interface
+│   │   ├── openai_provider.py    # OpenAI /v1/responses API
+│   │   ├── gemini_provider.py    # Google Gemini API
+│   │   ├── anthropic_provider.py # Anthropic API
+│   │   ├── factory.py            # Provider factory
+│   │   └── registry.py           # Provider catalog
 │   └── __init__.py
 │
-├── agents/                       # One folder per agent (any count, any names)
+├── agents/                       # One folder per agent (auto-discovered)
 │   └── <agent>/
-│       ├── identity.md           # Required: personality, goals, tone
+│       ├── identity.md           # Required: personality + goals
 │       ├── memory.md             # Optional: private memories
-│       └── personas.md           # Optional: views of others
+│       └── personas.md           # Optional: subjective views of others
 │
 ├── shared/
-│   ├── kickoff.md                # Scene/topic (turn 0 user message)
-│   ├── protocol.md               # Inner-thought + SPEAK/HOLD rules
+│   ├── kickoff.md                # Scene/scenario (turn 0)
+│   ├── protocol.md               # Floor rules + inner-thought guidance
 │   └── group_memories.md         # Optional: shared/pair-level history
 │
 ├── runs/<timestamp>/             # Auto-created per run
 │   ├── <agent>.log               # Full API trace per agent
 │   ├── transcript.md             # Human-readable conversation
-│   ├── decisions.jsonl           # Phase 1 decisions per turn
-│   └── raw.jsonl                 # Every API call (for replay)
+│   ├── decisions.jsonl           # Phase 1 decisions + penalty
+│   └── raw.jsonl                 # Every API call (replayable)
 │
 ├── logs/flow_<timestamp>.log     # Real-time flow trace
 │
@@ -152,439 +74,415 @@ Agent Teams Updated/
 
 ---
 
-## Root-Level Files
+## Configuration (`config.py`)
 
-### `main.py`
-**Purpose:** CLI entry point.
-**Flow:** Load env → create timestamped `runs/<ts>/` dir → init flow logger → instantiate
-`Orchestrator` → call `await orchestrator.run()` (loops `run_turn()` until termination).
-**Modify when:** You want a different startup behavior (rare). Don't touch for new agents/scenarios.
+All tunable knobs in one place. No hardcoded values in code.
 
-### `server.py`
-**Purpose:** FastAPI server for the React frontend.
-**Endpoints:**
-- `POST /api/reset` — creates a new `runs/<ts>/` dir, instantiates Orchestrator, calls `bootstrap()`. Returns ok.
-- `POST /api/turn` — calls `orchestrator.run_turn()`, returns `{"continue": bool, "data": {...}}`.
-- `GET /api/config` — parses agent identity files, returns `{agents: {...}, kickoff: "..."}` for the UI.
+### API & Providers
 
-The server holds a single `global_orchestrator` between calls (single-session model).
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `OPENAI_API_KEY` | from `.env` | OpenAI key |
+| `GEMINI_API_KEY` | from `.env` | Google Gemini key |
+| `ANTHROPIC_API_KEY` | from `.env` | Anthropic key |
+| `DEFAULT_PROVIDER` | auto-detect | Provider to use (openai, gemini, anthropic) |
+| `DEFAULT_MODEL` | model per provider | Default LLM (gpt-4o-mini, gemini-3.1-flash-lite-preview, claude-opus) |
 
-CORS is open (`*`) — adjust for production.
-Run: `python server.py` → listens on `127.0.0.1:8000` with auto-reload.
+### Orchestration
 
-### `config.py`
-**Purpose:** Single configuration surface. Every tunable knob lives here.
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `MAX_TURNS` | 20 | Hard stop on conversation length |
+| `ALL_HOLD_TERMINATION` | 2 | Stop after N consecutive all-HOLD turns |
+| `MAX_THOUGHT_HISTORY` | 2 | Per-agent inner thoughts visible (own thoughts only) |
+| `DECISION_MAX_TOKENS` | 200 | Phase 1 budget per agent |
+| `RESPONSE_MAX_TOKENS` | 500 | Phase 2 budget (winner only) |
 
-| Constant | Default | Meaning |
-|----------|---------|---------|
-| `MODEL` | `"gpt-4o-mini"` | OpenAI model |
-| `API_URL` | `https://api.openai.com/v1/responses` | Endpoint (NOT chat completions) |
-| `API_KEY` | from `.env` | Full `Bearer sk-...` string |
-| `AGENTS` | auto-discovered | List of agent folder names found in `agents/` |
-| `MAX_TURNS` | 20 | Hard cap |
-| `ALL_HOLD_TERMINATION` | 2 | Stop after N all-HOLD turns |
-| `MAX_THOUGHT_HISTORY` | 2 | How many recent inner thoughts each agent sees of *its own* (Option A) |
-| `DECISION_MAX_TOKENS` | 200 | Phase 1 budget |
-| `RESPONSE_MAX_TOKENS` | 500 | Phase 2 budget |
-| `CONSECUTIVE_SPEAKER_PENALTY` | True | Master flag for penalty system |
-| `CONSECUTIVE_PENALTY_MULTIPLIERS` | `{0:1.0, 1:0.85, 2:0.65, 3:0.40}` | Multiplier indexed by prior consecutive wins |
-| `AGENTS_DIR`, `SHARED_DIR`, `RUNS_DIR` | absolute paths | Auto-derived from this file's location |
+### Floor Selection & Penalty
 
-**Agent discovery:** `AGENTS` is auto-populated from subfolders of `agents/` — you add a new agent
-just by creating its folder. No need to list it here.
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `CONSECUTIVE_SPEAKER_PENALTY` | True | Enable penalty system |
+| `CONSECUTIVE_PENALTY_MULTIPLIERS` | `{0:1.0, 1:0.85, 2:0.65, 3:0.40}` | Multiplier by prior wins |
 
-**Deprecated/removed (do not re-add):**
-- `URGENCY_TIE_THRESHOLD` — removed; replaced by exact-tie randomization on effective urgency
-- `MAX_HELD_THOUGHTS` — replaced by `MAX_THOUGHT_HISTORY`
-- Hardcoded scenario theme keywords / memory triggers — fully removed
+### Paths (auto-derived)
 
-### `.env`
-Single line:
+| Key | Meaning |
+|-----|---------|
+| `AGENTS_DIR` | Agents folder |
+| `SHARED_DIR` | Shared context folder |
+| `RUNS_DIR` | Output runs folder |
+| `DB_PATH` | SQLite database |
+
+---
+
+## Two-Phase Floor Protocol
+
+Every turn: **Phase 1 (parallel decisions)** → **Floor selection** → **Phase 2 (winner speaks)**
+
+### Phase 1 — Decision (Parallel)
+
+All agents called concurrently. Each returns JSON:
+
+```json
+{
+  "decision": "HOLD",
+  "inner_thought": "I think..."
+}
 ```
-OPENAI_API_KEY=Bearer sk-proj-XXXXXXXX...
-```
-The literal `Bearer ` prefix is required (passed as the full Authorization header value).
-Protected by `.claude/settings.json` against accidental reads.
 
-### `requirements.txt`
-- `requests` — used by `agent.py` for HTTP POSTs
-- `python-dotenv` — for `.env` loading
-- `fastapi` + `uvicorn` — server mode
-- (optional) `httpx` — historical, currently unused
+or
+
+```json
+{
+  "decision": "SPEAK",
+  "urgency": 7.43,
+  "inner_thought": "I feel compelled to..."
+}
+```
+
+- **`inner_thought`** — private introspection (never shown to other agents)
+- **`urgency`** — precise float (e.g., 7.43, not 7.5); range 0–10
+
+### Floor Selection (Mechanical)
+
+Pure Python logic in `orchestrator.py`:
+
+1. Filter agents with `decision == "SPEAK"`
+2. Apply **consecutive-speaker penalty**:
+   - 0 prior wins → 1.00× (no penalty)
+   - 1 prior win → 0.85×
+   - 2 prior wins → 0.65×
+   - 3+ prior wins → 0.40× (heavy penalty)
+3. Pick highest **effective urgency**; exact ties broken by random selection
+4. Update **consecutive_wins** counter (winner +1, others reset to 0)
+5. Reset counter on all-HOLD turns
+
+### Phase 2 — Spoken Message (Winner Only)
+
+Winner called again with their `inner_thought` injected. Returns:
+
+```json
+{
+  "response": "Listen, I think we need to..."
+}
+```
+
+The **spoken message differs from inner thought** — private introspection vs. public pitch.
+
+### Termination
+
+Run ends when **any** of:
+- `turn >= MAX_TURNS` (default 20)
+- `ALL_HOLD_TERMINATION` consecutive all-HOLD turns (default 2)
 
 ---
 
 ## Source Code (`src/`)
 
-All code under `src/` is **scenario-agnostic**. It works for any number of agents (2 to N) with
-any topic. Adding/removing agents needs zero code changes.
+All code is **scenario-agnostic** and **N-agent generic**. No hardcoded agent names or counts.
 
 ### `src/agent.py`
 
 #### `class Agent`
 
-Represents one participant. Holds its persistent message history and private state.
+One participant. Holds personality, message history, thought history.
 
-**Constructor `Agent(name)`:**
+**Constructor `Agent(name, context_override=None)`:**
 - Loads `agents/<name>/identity.md` (required)
-- Loads `agents/<name>/memory.md` (optional, returns "" if missing)
-- Loads `agents/<name>/personas.md` (optional)
-- Loads `shared/group_memories.md` and **filters** to sections this agent belongs to
-  (top-level + any heading containing the agent's name + any "all/everyone/shared/group" heading)
+- Loads `agents/<name>/memory.md` (optional, "" if missing)
+- Loads `agents/<name>/personas.md` (optional, "" if missing)
 - Loads `shared/protocol.md`
-- Concatenates all into `self.system_prompt` (skipping empty optional sections)
-- Initializes `self.messages = [{"role": "system", "content": system_prompt}]`
-- Initializes `self.thought_history = []` (last N entries: `{turn, spoke, thought}`)
+- Loads and **filters** `shared/group_memories.md`:
+  - Top-level content always included
+  - Heading included if contains agent name OR "all"/"everyone"/"shared"/"group"
+  - Pair memories excluded if agent not in heading
+- Builds `system_prompt` (identity + how-you-see-others + memories + group-context + protocol)
+- Initializes `messages = [{"role": "system", "content": system_prompt}]`
+- Initializes `thought_history = []` (last N turns' inner thoughts, capped at `MAX_THOUGHT_HISTORY`)
 
 **Key methods:**
 
 | Method | Purpose |
 |--------|---------|
-| `append_user_message(content)` | Add user message to history |
-| `append_assistant_message(content)` | Add assistant message to history |
-| `record_thought(turn, spoke, thought)` | Append to `thought_history`, capped at `MAX_THOUGHT_HISTORY` |
-| `call_decision()` (async) | Phase 1 API call, returns parsed `{decision, urgency, inner_thought, ...}` |
-| `call_response(inner_thought)` (async) | Phase 2 API call (winner only); injects intent, returns `{response, ...}` |
-| `_post(max_tokens)` | HTTP POST to `/v1/responses` |
-| `_build_input_list()` | Converts `self.messages` to OpenAI `/v1/responses` input format |
-| `_extract_text(api_response)` | Extracts `output[0].content[0].text` |
+| `append_user_message(content)` | Append user message |
+| `append_assistant_message(content)` | Append assistant message |
+| `record_thought(turn, spoke, thought)` | Record inner thought (capped at `MAX_THOUGHT_HISTORY`) |
+| `call_decision()` (async) | Phase 1 API call → `{decision, urgency, inner_thought}` |
+| `call_response(inner_thought)` (async) | Phase 2 API call (winner only) → `{response}` |
+| `_post(max_tokens)` | HTTP POST to LLM provider |
 
-**Phase 1 invariant:** every `call_decision()` appends exactly one assistant message.
-**Phase 2 invariant:** every `call_response()` appends one user message (intent injection) + one assistant message.
-
-**Backward-compat:** decision parsing accepts both `inner_thought` (current) and `reason` (legacy) keys
-from the model. Output dict carries both for the frontend.
-
-**API payload format (`/v1/responses`):**
-```json
-{
-  "model": "gpt-4o-mini",
-  "input": [
-    {"role": "user",      "content": [{"type": "input_text", "text": "..."}]},
-    {"role": "assistant", "content": [{"type": "output_text","text": "..."}]}
-  ],
-  "max_output_tokens": 200,
-  "text": {"format": {"type": "json_object"}}
-}
-```
-Note: system role is converted to user role on the way out (this endpoint quirk).
-JSON output is enforced at the API level.
-
-**Modify when:** you change message structure, API format, or per-agent state.
-**Do NOT modify when:** changing agent personality (use markdown files) or floor logic (use orchestrator).
+**Managed Mode override:** `context_override` dict allows injecting custom identity/memory/personas/provider without loading files. Used by team builder.
 
 ### `src/orchestrator.py`
 
 #### `class Orchestrator`
 
-The turn loop and floor protocol. Stateless across turns except for what's stored on `self`.
+Turn loop and floor protocol. Stateful between turns.
 
 **State:**
+
 | Field | Type | Meaning |
 |-------|------|---------|
-| `agents` | `dict[str, Agent]` | One per name in `config.AGENTS` |
-| `logger` | `Logger` | Output file writer |
+| `agents` | `dict[str, Agent]` | All agents |
 | `turn` | `int` | Current turn number |
 | `consecutive_all_hold` | `int` | Counter for all-HOLD termination |
-| `last_spoke` | `dict[str, int]` | Last turn each agent spoke (0 = never) |
-| `shared_transcript` | `list` | `[{turn, speaker, message}]` — actual spoken messages |
-| `consecutive_wins` | `dict[str, int]` | Per-agent consecutive-win counter for penalty |
+| `last_spoke` | `dict[str, int]` | Last turn each agent spoke |
+| `shared_transcript` | `list` | `[{turn, speaker, message}]` — spoken only |
+| `consecutive_wins` | `dict[str, int]` | Per-agent consecutive-win counter |
 
 **Methods:**
 
-`bootstrap()`: loads `kickoff.md`, appends as user message to all agents, seeds shared
-transcript with turn 0 entry from "Narrator".
+`bootstrap()`: Load kickoff.md, append to all agents, seed transcript with turn 0 (Narrator).
 
 `run_turn() -> {"continue": bool, "data": {...}}`:
 
-1. **Phase 1 build:** for each agent, call `build_decision_user_message(...)` with:
-   - turn number, when they last spoke
-   - shared transcript slice since their last turn
-   - their **own** thought_history (private to them)
+1. **Phase 1 build:** For each agent, construct decision prompt with:
+   - Current turn number
+   - When they last spoke
+   - Shared transcript slice since their last turn
+   - Their own `thought_history` (private)
 
-2. **Phase 1 call:** `asyncio.gather(*[a.call_decision() for a in agents])`. Parallel.
+2. **Phase 1 call:** `asyncio.gather()` — all agents call `call_decision()` in parallel
 
-3. **Apply penalty:** `_apply_penalty(name, raw_urgency)` → returns
-   `{effective_urgency, penalty_multiplier, penalty_delta, consecutive_wins_before, penalty_reason}`.
-   Mirrored to `decisions[name]`. Also mirrors `inner_thought` into `reason` for frontend backcompat.
+3. **Apply penalty:** For each speaker, compute `effective_urgency = raw_urgency × multiplier`
 
-4. **Floor selection:** `max(effective_urgency)` over speakers, exact-tie random.
-   Update `consecutive_wins`: winner +1, all others reset to 0.
-   Reset to 0 for everyone on all-HOLD.
+4. **Floor selection:** Pick agent with highest `effective_urgency` (random tie-break)
 
-5. **Record thoughts (Option A):** call `record_thought(turn, spoke=is_winner, thought=...)`
-   for **every** agent (winners and holders alike). This is the agent's private memory of
-   what it was thinking — never shared.
+5. **Record thoughts:** For **every** agent (speakers + holders), call `record_thought()`. Private memory.
 
-6. **Phase 2:** if anyone spoke, winner's `call_response(inner_thought)` produces the message.
-   Append to shared transcript. Update `last_spoke`.
+6. **Phase 2:** If winner exists, call winner's `call_response()`, append to shared transcript
 
-7. **Logging:** structured logs to `logger`, real-time trace to `flow_logger`,
-   then `logger.write_files()` (idempotent, runs every turn).
+7. **Logging:** Write to flow logger, per-run logger, call `logger.write_files()` (idempotent)
 
-8. Return `{"continue": turn < MAX_TURNS, "data": {turn, winner, message, decisions}}`.
+8. Return `{"continue": not terminated, "data": {turn, winner, message, decisions}}`
 
-`run()`: CLI loop. Calls `bootstrap()` then `run_turn()` until `continue == False`.
-
-**Helper functions:**
-- `_transcript_since(last_turn)` — returns shared transcript entries strictly after a given turn
-- `_penalty_multiplier(consecutive_wins)` — looks up multiplier with safe fallback to highest tier
-- `_apply_penalty(name, raw_urgency)` — assembles full penalty info dict
-
-**Modify when:** changing floor selection, penalty logic, termination conditions, or adding new state.
-**Do NOT modify when:** changing prompts (use `context_builder.py`) or agent files.
+`run()`: CLI loop. Call `bootstrap()` then `run_turn()` until `continue == False`.
 
 ### `src/context_builder.py`
 
-Pure functions — no class, no state.
+Pure functions. Construct Phase 1 decision prompt.
 
-#### `build_decision_user_message(turn_num, agent_name, you_last_spoke, transcript_since_last_turn, thought_history) -> str`
+`build_decision_user_message(turn_num, agent_name, you_last_spoke, transcript_since_last_turn, thought_history) -> str`
 
-Returns a JSON string containing:
+Returns JSON:
+
 ```json
 {
   "turn": 5,
   "you_last_spoke": "turn 3",
-  "transcript_since_your_last_turn": [{"turn": 4, "speaker": "Jax", "message": "..."}],
-  "your_recent_inner_thoughts": [
-    {"turn": 3, "spoke": true, "thought": "..."},
-    {"turn": 4, "spoke": false, "thought": "..."}
-  ],
-  "instruction": "<long instruction with examples>"
+  "transcript_since_your_last_turn": [...],
+  "your_recent_inner_thoughts": [...],
+  "instruction": "<explicit guidance with examples>"
 }
 ```
 
-The **instruction** is the heart of the system. It explicitly distinguishes inner thought from
-outward message, with concrete good/bad examples. Updating this is prompt engineering — do it
-deliberately and re-run to verify behavior.
+The **instruction** is the core prompt. Distinguishes inner thought from spoken message with concrete examples. Update carefully.
 
-#### `format_transcript_for_log(turn_num, winner, winner_message, decisions, agent_order) -> str`
+### `src/providers/`
 
-Renders one turn for the human-readable transcript:
-```
-[Turn 5]
-  Speaker: Jax
-  Message: Listen, the thrusters are shot...
-  (thought, spoke) Jax: I have to press this point.
-  (thought, held back) Nova: I should keep pushing my research.
-  (thought, HOLD) Chen: I'll wait — Reyes seems to lead.
-```
+Multi-provider LLM abstraction.
 
-**Modify when:** changing what context agents see (decision payload) or transcript format.
+**Files:**
+- `base.py` — `ProviderBase` interface
+- `openai_provider.py` — OpenAI `/v1/responses` endpoint
+- `gemini_provider.py` — Google Gemini API
+- `anthropic_provider.py` — Anthropic API
+- `factory.py` — `get_provider(type)` factory
+- `registry.py` — `PROVIDER_CATALOG` (names + models)
+
+Each provider must implement:
+- `generate_json(api_key, model, system_prompt, messages, max_tokens, **kwargs) -> {"text": str, "usage": dict}`
+- Model validation + error handling
 
 ### `src/logger.py`
 
-#### `class Logger`
+Idempotent output writer. Calls `write_files()` after every turn.
 
-Persists run outputs. Idempotent — `write_files()` is called after every turn.
+**Output files in `runs/<timestamp>/`:**
 
-| Output file | Format | Contents |
-|-------------|--------|----------|
-| `<agent>.log` | Markdown + JSON blocks | Per-agent: every API request/response with timestamps |
-| `transcript.md` | Markdown | Human-readable conversation, scenario-agnostic header (uses dynamic agent names) |
-| `decisions.jsonl` | JSONL | One line per turn: `{turn, decisions: {<name>: {decision, urgency, effective_urgency, penalty_multiplier, ...}}}` |
-| `raw.jsonl` | JSONL | One line per API call: `{timestamp, agent, turn, payload, response}` |
-
-**Modify when:** adding new output formats or changing what's recorded. Rare.
+| File | Format | Contents |
+|------|--------|----------|
+| `<agent>.log` | Markdown | Per-agent API trace with timestamps |
+| `transcript.md` | Markdown | Human-readable conversation |
+| `decisions.jsonl` | JSONL | One line per turn: decisions + penalty fields |
+| `raw.jsonl` | JSONL | Every API call (replayable) |
 
 ### `src/flow_logger.py`
 
 Real-time structured tracing for debugging. Writes to `logs/flow_<timestamp>.log`.
 
 ```
-[10:27:46.264] FLOOR | turn=1 winner=nova urgency=9.85 competed=['chen','jax','nova','reyes','rook']
+[10:27:46.264] FLOOR | turn=1 winner=nova urgency=9.85
 [10:27:46.265] STEP  | turn 1: phase 2 — nova generating response
 ```
 
-Functions:
-| Function | Use |
-|----------|-----|
-| `init(timestamp)` | Open log file (called by `main.py` and `server.py`) |
-| `step(label)` | Major step marker |
-| `info(label, data)` | Arbitrary data dump |
-| `ok(label)` | Success |
-| `warn(label)` | Warning (e.g. all-HOLD) |
-| `error(label, exc)` | Error (with optional exception) |
-| `decision(turn, name, decision, urgency, inner_thought)` | One-line decision summary |
-| `floor(turn, winner, urgency, all_speakers)` | Floor selection result |
-| `message(turn, speaker, text)` | Spoken message |
-| `agent_messages_state(name, messages)` | Snapshot of agent's message array |
+Functions: `init()`, `step()`, `decision()`, `floor()`, `message()`, `info()`, `warn()`, `error()`
 
 ---
 
-## Agents (`agents/`)
+## Database (`db.py`)
 
-Each subfolder = one agent. Folder name = agent's identifier (lowercase, no spaces).
-The `config.AGENTS` list is auto-populated from these folders.
+SQLite schema for Managed Mode persistence.
 
-### Required: `<agent>/identity.md`
+**Key tables:**
 
-Defines personality, goal, speech style, urgency tendency. The most important file per agent.
+| Table | Purpose |
+|-------|---------|
+| `teams` | Team metadata (id, name, description, created_at) |
+| `llm_provider_configs` | Provider keys (id, provider_type, api_key, is_valid) |
+| `team_agents` | Agents in teams (id, team_id, slug, personality fields, model_id) |
+| `team_agent_memories` | Per-agent memories (id, team_agent_id, type, target_agent_slug, title, content) |
+| `team_group_memories` | Shared memories (id, team_id, title, content, participant_slugs, is_general) |
+| `conversations` | Launched conversations (id, team_id, title, status, settings_json, created_at) |
+| `conversation_messages` | Chat messages (id, conversation_id, turn, speaker, text, timestamp) |
+| `conversation_decisions` | Phase 1 decisions (id, conversation_id, turn, agent_slug, decision_json) |
 
-**Recommended sections** (none are technically required, but all together produce best results):
-
-1. **Header** — `**Name:**`, `**Age:**`, `**Core Personality:**`
-2. **Communication Profile** — `**Talkativeness:** 0.0–1.0`, `**Speech Style:**`, `**Quirks:**`
-3. **Private Goal** — what they want from the conversation
-4. **Important** — explicit guidance ("Push back at least twice before compromising")
-5. **Post-consensus behavior** — what to do after the group decides
-6. **Handling Defeat** — options when their conviction loses (go silent, concede logistics, pivot, sub-argument)
-7. **Urgency Tendency** — typical range for this agent (extroverts 5–9, introverts 3–6, passion spikes 9–10)
-8. **What He/She Values** — core values
-9. **Special Rules** — agent-specific quirks ("No emojis. Ever.", "Speak less than the others.")
-
-### Optional: `<agent>/memory.md`
-
-Free-form private memories only this agent can see. Personal facts, secrets, opinions about
-others (uncensored), historical context, vulnerabilities. Influences the system prompt — never
-quoted to other agents.
-
-If missing, the section is silently skipped.
-
-### Optional: `<agent>/personas.md`
-
-This agent's **subjective** view of every other agent. Asymmetric on purpose — Aarav's view of
-Priya ≠ Priya's view of Aarav. Should include:
-- How they see this person (potentially biased, can be wrong)
-- Closeness / Trust / Irritation (0.0–1.0 each)
-- Shared memories
-- Typical dynamic
-- Leverage points (what would actually convince this person)
-
-If missing, silently skipped.
+**Key helpers:**
+- `init_db()` — Create schema
+- `get_conn()` — Context manager (auto-commit)
+- `encrypt_secret()` / `decrypt_secret()` — Windows DPAPI for API keys
+- `slugify()` — Convert display names to slugs
+- `parse_markdown_sections()` — Extract markdown headings
 
 ---
 
-## Shared Context (`shared/`)
+## FastAPI Server (`server.py`)
 
-### `shared/kickoff.md`
+**CORS:** Open (`*`). Tighten for production.
 
-The opening scene. Loaded once at bootstrap, appended as the first user message to every agent
-and seeded into the shared transcript as turn 0 from "Narrator".
+**Managed Mode endpoints:**
 
-200–400 words. Conversational tone. Set the scenario, the stakes, the options. Don't reveal
-arguments — let them emerge.
+### Team Management
+- `GET /api/managed/teams` — List all teams
+- `POST /api/managed/teams` — Create team
+- `GET /api/managed/teams/{id}` — Get team detail
+- `PUT /api/managed/teams/{id}` — Update team
+- `DELETE /api/managed/teams/{id}` — Delete team
 
-### `shared/protocol.md`
+### Provider Management
+- `GET /api/managed/providers` — List provider configs + catalog
+- `POST /api/managed/providers` — Save + validate provider key
+- `DELETE /api/managed/providers/{id}` — Delete provider
 
-The hard rules every agent sees in their system prompt. This is what tells them:
-- The decision JSON format (HOLD vs SPEAK)
-- That `inner_thought` is private monologue, NOT a pitch (with concrete examples)
-- The Phase 2 spoken-message vs inner-thought distinction
-- When to SPEAK vs HOLD (strict criteria)
-- Urgency scoring guide (0–10 with bands)
-- That `your_recent_inner_thoughts` are their own private memory across turns
-- To defend their private goal at least twice before compromising
+### Team Builder (Symposium AI)
+- `POST /api/managed/team-builder/chat` — One turn of interview
+  - **Request:** `{provider_config_id, model_id, messages}`
+  - **Response:** `{assistant_message, ready_to_build, missing_information, captured_summary}`
+- `POST /api/managed/team-builder/build` — Generate final team from conversation
+  - **Response:** `{team: TeamDetailResponse}`
 
-**Stable across scenarios.** Don't rewrite per-scenario unless the protocol itself changes.
+### Conversations
+- `POST /api/managed/teams/{id}/conversations` — Launch conversation
+  - **Request:** `{title, participant_slugs, scenario_prompt, max_turns, all_hold_termination, consecutive_speaker_penalty, penalty_multiplier_1/2/3}`
+  - **Response:** `{conversationId}`
+- `GET /api/managed/conversations/{id}` — Get conversation state
+  - **Response:** `{conversation, messages, turns, config}`
+- `POST /api/managed/conversations/{id}/turn` — Advance one turn
 
-### `shared/group_memories.md` (optional)
+### Uploads
+- `POST /api/managed/uploads/agent-avatar` — Upload image
+  - **Response:** `{avatar_url}`
 
-Shared history. Filtered per agent at load time:
-- Top-level content (before any `## ` heading) → always shown
-- A `## Heading` is included if it contains the agent's name OR words like
-  "all", "everyone", "shared", "group"
-- Otherwise excluded (e.g. pair memories the agent isn't part of)
-
-This lets you encode asymmetric group history: e.g. an Aarav+Priya secret only those two see.
+**Classic Mode endpoints (for backward-compat):**
+- `GET /api/config` — Bootstrap agent metadata
+- `POST /api/reset` — Start new simulation
+- `POST /api/turn` — Advance one turn
 
 ---
 
-## Outputs (`runs/`, `logs/`)
+## Root-Level Files
 
-### `runs/<timestamp>/`
-Auto-created per run. Contents written **after every turn** (not just at end), so server-mode
-runs always have current state on disk.
+### `main.py`
 
-- `<agent>.log` — full per-agent API traces
-- `transcript.md` — human-readable
-- `decisions.jsonl` — Phase 1 decisions including penalty fields
-- `raw.jsonl` — every API call for replay
+CLI entry point. Flow:
+1. Load `.env`
+2. Create timestamped `runs/<ts>/` directory
+3. Initialize flow logger
+4. Create `Orchestrator` from agents in `agents/`
+5. Call `await orchestrator.run()` (loop until termination)
+6. Files auto-written to `runs/<ts>/`
 
-### `logs/flow_<timestamp>.log`
-Real-time structured trace, separate from per-run outputs. Useful for debugging across runs.
+### `server.py`
+
+FastAPI server. Listens on `127.0.0.1:8000` (auto-reload in dev).
+
+Holds `global_orchestrator` between requests (single-session model for classic API).
+
+Managed Mode endpoints use SQLite (`arena.db`) for team/provider/conversation persistence.
+
+### `.env`
+
+Single line:
+```
+OPENAI_API_KEY=sk-proj-...
+GEMINI_API_KEY=...
+ANTHROPIC_API_KEY=...
+```
+
+Protected by `.claude/settings.json` against accidental reads.
+
+### `requirements.txt`
+
+- `fastapi`, `uvicorn` — server
+- `pydantic` — request validation
+- `requests` — HTTP (legacy, mostly unused)
+- `python-dotenv` — `.env` loading
 
 ---
 
 ## How to Add a New Agent
 
-1. **Create folder:** `agents/<name>/` (lowercase, matches your desired display name)
-2. **Required:** `agents/<name>/identity.md` (use sections listed above)
-3. **Optional:** `agents/<name>/memory.md`, `agents/<name>/personas.md`
-4. **Optional:** add this agent to existing pairs/groups in `shared/group_memories.md`
-5. **Run:** `python main.py` — `config.AGENTS` is auto-populated; no config edit needed
+1. Create `agents/<name>/` (lowercase, no spaces)
+2. Create `agents/<name>/identity.md` (required):
+   - Name, Age, Core Personality
+   - Talkativeness (0.0–1.0)
+   - Speech Style, Private Goal, Values, Handling Defeat, Urgency Tendency
+3. Optionally create `agents/<name>/memory.md` (private facts)
+4. Optionally create `agents/<name>/personas.md` (subjective views)
+5. Run `python main.py` — agent auto-discovered via folder name
 
-**Sanity check:** the flow log will show this agent making a decision on turn 1. If they're
-absent, check the folder name has no typo and `identity.md` exists.
+**Sanity check:** Flow log shows agent making decision on turn 1.
 
 ---
 
 ## How to Add a New Scenario
 
-Two paths:
+**Same agents, new context:**
+- Edit `shared/kickoff.md` (scene setup)
+- Optionally edit `shared/group_memories.md` (shared history)
+- Lightly update agents' `identity.md` (private goals reflect scenario)
+- Protocol stays same
 
-### Same agents, new context
-- Edit `shared/kickoff.md` to set up the new scene
-- Optionally edit `shared/group_memories.md` for new shared history
-- Lightly update each agent's `identity.md` (private goal must reflect the new scenario)
-- `protocol.md` stays unchanged
-
-### New agents, new context
-- Delete `agents/*/` (or move them aside)
-- Create new agents per "How to Add a New Agent" steps
+**New agents, new context:**
+- Move/delete `agents/*`
+- Create new agents per "How to Add a New Agent"
 - Replace `shared/kickoff.md` and `shared/group_memories.md`
-- `protocol.md` stays unchanged unless the protocol itself changes
-- Update `config.MAX_TURNS` if needed (longer/shorter conversations)
-
-The orchestrator, logger, agent class, and protocol stay the same. Everything you change is data.
-
----
-
-## Modification Reference Map
-
-| If you want to… | Edit |
-|-----------------|------|
-| Add a new agent | Create `agents/<name>/identity.md` (+ optional `memory.md`, `personas.md`) |
-| Change agent personality | `agents/<name>/identity.md` |
-| Add private agent memories | `agents/<name>/memory.md` |
-| Change how an agent sees others | `agents/<name>/personas.md` |
-| Change the conversation topic | `shared/kickoff.md` |
-| Change SPEAK/HOLD rules or urgency guidance | `shared/protocol.md` |
-| Add shared/pair group history | `shared/group_memories.md` |
-| Tune turn limits, model, penalty multipliers | `config.py` |
-| Change Phase 1 decision prompt structure | `src/context_builder.py` |
-| Change floor selection or penalty logic | `src/orchestrator.py` (`_apply_penalty`, floor selection) |
-| Change API payload format | `src/agent.py` (`_post`, `_build_input_list`) |
-| Add a new output file format | `src/logger.py` (`write_files`) |
-| Add a new flow log line type | `src/flow_logger.py` |
-| Change the FastAPI surface (new endpoint, etc.) | `server.py` |
+- Update `config.MAX_TURNS` if longer/shorter
+- Protocol unchanged unless protocol rules change
 
 ---
 
 ## Debugging Checklist
 
-If something doesn't behave as expected, in order:
-
-1. **Flow log** (`logs/flow_<ts>.log`) — verify all agents made decisions, see who won the floor
-2. **Per-agent log** (`runs/<ts>/<agent>.log`) — see exactly what context they got and what they returned
-3. **decisions.jsonl** — see all Phase 1 decisions including penalty effects (raw vs effective urgency)
-4. **transcript.md** — read it like a human, spot if anyone is repeating themselves or talking past others
-
-Common issues and where to look:
-- **An agent never speaks** → Check `identity.md` urgency tendency; check protocol's HOLD criteria isn't being misapplied
-- **Same agent dominates** → Check `consecutive_wins` is incrementing in the flow log; check `CONSECUTIVE_PENALTY_MULTIPLIERS`
-- **Inner thoughts look like pitches** → The Phase 1 instruction in `context_builder.py` needs sharper examples
-- **Files not written to runs/** → Verify `logger.write_files()` is called after every turn (already wired)
-- **Frontend not updating** → See `agent-chat-arena-main/FRONTEND_CONTEXT.md`
+| Symptom | Where to look |
+|---------|--------------|
+| Agent never speaks | Check `urgency_tendency` in identity.md; check Phase 1 instruction |
+| Same agent dominates | Check `consecutive_wins` in flow log; verify penalty multipliers |
+| Inner thoughts look like pitches | Phase 1 instruction in `context_builder.py` needs sharper examples |
+| Files not written | `logger.write_files()` called after every turn (already wired) |
+| API error | Check `.env` keys valid; check provider is configured in `config.py` |
+| Managed Mode broken | Check `arena.db` exists; verify SQLite schema via `db.init_db()` |
 
 ---
 
-## Design Principles (don't violate without thought)
+## Design Principles
 
-1. **LLMs never see urgency.** Score selection is purely mechanical. Keep it that way.
-2. **Inner thought is private.** The transcript only ever contains spoken messages.
-3. **Asymmetry is the point.** Each agent has its own subjective world model.
-4. **Scenario-agnostic code.** No agent names hardcoded in `src/`. Themes loaded from data.
-5. **Idempotent writes.** `write_files()` overwrites cleanly — safe to call after every turn.
-6. **Optional files stay optional.** `memory.md` and `personas.md` can be missing.
-7. **N-agent generality.** Code works for any N ≥ 2 — no magic constants tied to "3 friends".
+1. **LLMs never see urgency.** Floor selection is mechanical Python only.
+2. **Inner thought is private.** Transcript contains only spoken messages.
+3. **Scenario-agnostic code.** No hardcoded agent names in `src/`.
+4. **N-agent generic.** Code works for any count ≥ 2.
+5. **Idempotent writes.** `write_files()` safe to call every turn.
+6. **Optional files stay optional.** `memory.md` and `personas.md` can be absent.
+7. **Provider-agnostic.** Supports OpenAI, Gemini, Anthropic; new providers via `base.py` interface.
+8. **Managed Mode is persistent.** SQLite holds teams, providers, conversations; agents/memories computed per turn.
