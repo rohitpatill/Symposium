@@ -188,6 +188,26 @@ For step-by-step guides: see `CONTEXT.md` (backend) or `agent-chat-arena-main/FR
 
 ---
 
+## Documentation Maintenance
+
+**CRITICAL:** After every meaningful code change, update docs immediately and precisely:
+
+| Change Type | Update |
+|-------------|--------|
+| **New file/folder added** | Update `CONTEXT.md` (backend) or `FRONTEND_CONTEXT.md` (frontend) folder structure. Then update `CLAUDE.md` Architecture section. |
+| **File deleted** | Remove from both detailed docs and `CLAUDE.md`. |
+| **New API endpoint** | Add to `CONTEXT.md` FastAPI Server section (backend) or `FRONTEND_CONTEXT.md` API Contract section (frontend). Update `CLAUDE.md` Adding to the System table if needed. |
+| **New logic flow / orchestration change** | Update `CONTEXT.md` Key Mechanisms or Source Code sections. Update `CLAUDE.md` Key Concepts if user-facing. |
+| **New provider / multi-provider support** | Add to `CONTEXT.md` providers/ section. Update `CLAUDE.md` Multi-Provider LLM Support. |
+| **New hook / component** | Add to `FRONTEND_CONTEXT.md` Hooks or Components section. Update `CLAUDE.md` if affects architecture. |
+| **New team form field / Managed Mode feature** | Add to `FRONTEND_CONTEXT.md` How to Add section. Update `CLAUDE.md` Adding to the System table. |
+| **Config knob change (default, new flag)** | Update `CONTEXT.md` Configuration section. Update `CLAUDE.md` Configuration summary. |
+| **Database schema change** | Update `CONTEXT.md` Database section with table/column details. Update `CLAUDE.md` Managed Mode Persistence if structure changes. |
+
+**Rule:** Keep docs **concise and precise**. No bloat. Only document what changed, not what already works. Reference full docs for details.
+
+---
+
 ## Further Reading
 
 - **Backend deep dive:** `CONTEXT.md` — orchestrator, providers, database, endpoints
