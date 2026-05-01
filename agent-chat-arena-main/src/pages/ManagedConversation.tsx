@@ -48,11 +48,11 @@ export default function ManagedConversationPage() {
         <div className="flex min-h-0 flex-1">
           <main className="flex min-w-0 flex-1 flex-col">
             {sim.error && (
-              <div className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              <div className="mx-auto mt-4 w-full max-w-4xl rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                 {sim.error}
               </div>
             )}
-            <div className="mx-auto mt-4 flex w-full max-w-3xl justify-end px-4 sm:px-6">
+            <div className="mx-auto mt-4 flex w-full max-w-4xl justify-end px-4 sm:px-6">
               <ScenarioSheetButton scenario={sim.conversation?.scenario_prompt || sim.config?.kickoff} />
             </div>
             <ChatStream
@@ -63,7 +63,7 @@ export default function ManagedConversationPage() {
             />
           </main>
           {panelOpen && (
-            <div className="hidden w-[360px] shrink-0 lg:block xl:w-[420px]">
+            <div className="hidden w-[480px] shrink-0 lg:block xl:w-[540px]">
               <UnderTheHoodPanel
                 currentTurn={sim.currentTurn}
                 isThinking={sim.isThinking}

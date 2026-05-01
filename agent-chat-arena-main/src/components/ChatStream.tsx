@@ -44,7 +44,7 @@ export function ChatStream({ messages, isThinking, hasStarted, config }: Props) 
 
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin">
-      <div className="max-w-3xl mx-auto w-full px-4 sm:px-6 py-6 space-y-5">
+      <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 py-6 space-y-5">
         {messages.map((m) => (
           <MessageBubble 
             key={m.id} 
