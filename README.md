@@ -29,19 +29,19 @@ Do the conversations feel more human? Maybe. The ones Symposium produces definit
 
 **Build your own teams.** Pick a name, write a scenario, and design each agent's personality, speech style, private goals, what they value, and how they handle defeat. Each agent gets its own *persona* of every other agent on the team — your subjective view of them, which you control independently.
 
-![Team builder with manual and AI options](https://drive.google.com/file/d/1CSfLWXIMeLlhqbfDSbx95bt_sjIhVLXG/view?usp=sharing)
+![Team builder with manual and AI options](https://drive.google.com/uc?export=view&id=1CSfLWXIMeLlhqbfDSbx95bt_sjIhVLXG)
 
 **Or let Symposium AI build the team for you.** Describe the kind of conversation you want — *"three founders arguing over whether to take a buyout"*, or *"a doctor, an ethicist, and a patient debating an end-of-life decision"* — and Symposium AI interviews you, asks the right questions, and assembles the full team in one shot.
 
 **Mix and match models per agent.** Symposium supports **40+ models across OpenAI, Anthropic, and Google Gemini**. Assign one to each agent independently. Want a deep, reflective philosopher? Give them a frontier reasoning model. Want a junior intern who keeps it short and reactive? Give them something cheap and fast. The personality of an agent comes as much from the model behind it as from the prompt.
 
-![Team detail with agent configuration](https://drive.google.com/file/d/1y9LPJHdMpq6cP2LlrPcKb5viqFXMaT84/view?usp=sharing)
+![Team detail with agent configuration](https://drive.google.com/uc?export=view&id=1y9LPJHdMpq6cP2LlrPcKb5viqFXMaT84)
 
 **Watch them deliberate.** Launch a conversation from any team and watch it play out turn by turn. The main view shows what each agent says out loud. A side panel — *Under the Hood* — shows the private thoughts they had this turn, who wanted the floor and how badly, who held back, and who actually got picked.
 
-![Conversation in progress - phase 1 deciding](https://drive.google.com/file/d/1UIQycTJtIZ-Vh0xUtqXU8zsIakbABzJd/view?usp=sharing)
+![Conversation in progress - phase 1 deciding](https://drive.google.com/uc?export=view&id=1UIQycTJtIZ-Vh0xUtqXU8zsIakbABzJd)
 
-![Conversation with floor decided and urgency bars](https://drive.google.com/file/d/1OlGFX78U-5vjJV9dvfIUDdct13P5Jiuj/view?usp=sharing)
+![Conversation with floor decided and urgency bars](https://drive.google.com/uc?export=view&id=1OlGFX78U-5vjJV9dvfIUDdct13P5Jiuj)
 
 
 ---
