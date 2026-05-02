@@ -34,8 +34,8 @@ export default function ManagedConversationPage() {
           hasStarted={sim.hasStarted}
           isThinking={sim.isThinking}
           status={sim.status}
-          autoPlay={false}
-          setAutoPlay={() => undefined}
+          autoPlay={sim.autoPlay}
+          setAutoPlay={sim.setAutoPlay}
           onStart={sim.start}
           onAdvance={sim.advance}
           onReset={sim.reload}

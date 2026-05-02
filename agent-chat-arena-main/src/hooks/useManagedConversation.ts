@@ -21,6 +21,7 @@ export function useManagedConversation(conversationId?: string) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [currentTurnIndex, setCurrentTurnIndex] = useState(-1);
   const [status, setStatus] = useState<Status>("idle");
+  const [autoPlay, setAutoPlay] = useState(false);
   const [loading, setLoading] = useState(true);
   const [conversation, setConversation] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +136,15 @@ export function useManagedConversation(conversationId?: string) {
     }
   }, [conversationId, status]);
 
+  // Auto-play loop
+  useEffect(() => {
+    if (!autoPlay) return;
+    if (status !== "running") return;
+
+    const id = window.setTimeout(() => advance(), 1500);
+    return () => window.clearTimeout(id);
+  }, [autoPlay, status, advance]);
+
   const currentTurn = useMemo(() => currentTurnIndex >= 0 ? turns[currentTurnIndex] : undefined, [currentTurnIndex, turns]);
 
   return {
@@ -151,6 +161,8 @@ export function useManagedConversation(conversationId?: string) {
     loading,
     isThinking: status === "thinking",
     hasStarted: status !== "idle",
+    autoPlay,
+    setAutoPlay,
     start,
     advance,
     reload: load,
