@@ -4,7 +4,7 @@
 
 I was thinking about how AI agents work together. There are lots of frameworks out there where agents collaborate on tasks, build things, solve problems. But something kept nagging at me: when agents talk to each other, it doesn't sound like humans talking. It sounds like functions calling functions. And I started wondering — what would it actually take to make an agent conversation feel like a real meeting?
 
-So I started thinking about what happens when humans sit in a room and talk. How do we actually decide who speaks next? What's the difference between what we think and what we say? Why do we remember things differently? And I realized there are patterns in human conversation that almost no agent framework tries to replicate honestly.
+So I started thinking about what happens when humans sit in a room and talk. How do we actually decide who speaks next? What's the difference between what we think and what we say? Why do we remember things differently? And I realized there are patterns in human conversation that most of the agent framework are not replicating honestly.
 
 That's what Symposium is. One attempt at building a framework where agents talk more like humans actually do.
 
