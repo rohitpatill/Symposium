@@ -10,6 +10,8 @@ That's what Symposium is. One attempt at building a framework where agents talk 
 
 ---
 
+![Team builder with manual and AI options](https://drive.google.com/uc?export=view&id=1gJizXjandqtAaC5LTz0epA8DNabt5mm6)
+
 ## The Idea
 
 When humans talk in a group, four things are happening:
